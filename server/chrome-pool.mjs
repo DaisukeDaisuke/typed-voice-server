@@ -46,19 +46,19 @@ async function fetchJson(url, { timeoutMs = 1000, method = "GET" } = {}) {
   }
 }
 
-async function discoverInitialPage(port, deadline) {
+async function discoverInitialPage(port, deadline, expectedUrl) {
   let lastError;
   while (Date.now() < deadline) {
     try {
       const targets = await fetchJson(`http://127.0.0.1:${port}/json/list`);
-      const page = targets.find((target) => target.type === "page" && target.webSocketDebuggerUrl);
+      const page = targets.find((target) => target.type === "page" && target.webSocketDebuggerUrl && target.url === expectedUrl);
       if (page) return page;
     } catch (error) {
       lastError = error;
     }
     await sleep(50);
   }
-  throw new Error(`Chrome page target unavailable: ${lastError?.message ?? "timeout"}`);
+  throw new Error(`Chrome engine page target unavailable for ${expectedUrl}: ${lastError?.message ?? "timeout"}`);
 }
 
 async function createPage(port, url) {
@@ -272,6 +272,7 @@ export class ChromeEnginePool {
   async start() {
     await mkdir(this.profileDir, { recursive: true });
     this.onState({ chrome: `起動中 0/${this.count}`, webmcp: "待機中", model: "読み込み中" });
+    const firstEngineUrl = this.#engineUrl(0);
     const args = [
       `--user-data-dir=${this.profileDir}`,
       "--remote-debugging-port=0",
@@ -281,7 +282,7 @@ export class ChromeEnginePool {
       "--disable-renderer-backgrounding",
       "--no-first-run",
       "--no-default-browser-check",
-      this.#engineUrl(0),
+      firstEngineUrl,
     ];
     const chrome = spawn(this.chromePath, args, { stdio: "ignore", windowsHide: true });
     this.chrome = chrome;
@@ -325,7 +326,7 @@ export class ChromeEnginePool {
     }
     if (!this.port) throw new Error("Chrome DevTools port unavailable");
 
-    const firstTarget = await discoverInitialPage(this.port, deadline);
+    const firstTarget = await discoverInitialPage(this.port, deadline, firstEngineUrl);
     const first = new EngineTab({
       index: 0,
       target: firstTarget,
