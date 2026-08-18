@@ -1,0 +1,67 @@
+name: Build typed-voice-server
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: typed-voice-server-release
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Initialize typed-voice submodule only
+        run: git submodule update --init --depth 1 typed-voice
+      - name: Add server-only browser entry
+        run: |
+          if [ ! -f typed-voice/server-engine.html ] || [ ! -f typed-voice/src/server-engine.js ]; then
+            git -C typed-voice apply ../engine-source/typed-voice-server-engine.patch
+          fi
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: typed-voice/package-lock.json
+      - name: Test Node server core
+        run: node --test test/*.test.mjs
+      - name: Build typed-voice browser assets
+        working-directory: typed-voice
+        run: |
+          npm ci
+          npm test
+          npm run build
+      - name: Assemble local release artifact
+        run: |
+          mkdir -p dist/typed-voice-server/engine
+          cp server-main.mjs package.json README.md LICENSE dist/typed-voice-server/
+          cp -R server admin worker web docs dist/typed-voice-server/
+          cp -R typed-voice/dist/. dist/typed-voice-server/engine/
+          cat > dist/RELEASE_NOTES.md <<'EOF'
+          CI-built typed-voice-server runtime.
+
+          The archive contains prebuilt browser assets. Runtime npm installation is not required.
+          Python and Codespaces are not required.
+          EOF
+          cd dist
+          zip -r typed-voice-server.zip typed-voice-server
+      - uses: actions/upload-artifact@v7
+        with:
+          name: typed-voice-server-local
+          path: dist/typed-voice-server.zip
+          if-no-files-found: error
+      - name: Update latest runtime release
+        uses: ncipollo/release-action@v1.21.0
+        with:
+          artifacts: ${{ github.workspace }}/dist/typed-voice-server.zip
+          artifactErrorsFailBuild: true
+          bodyFile: ${{ github.workspace }}/dist/RELEASE_NOTES.md
+          makeLatest: true
+          name: typed-voice-server - Latest (Build ${{ github.run_number }})
+          tag: typed-voice-server-latest
+          commit: ${{ github.sha }}
+          allowUpdates: true
+          removeArtifacts: true
+          prerelease: false

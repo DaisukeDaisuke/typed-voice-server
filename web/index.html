@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f3f1ed">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'">
+  <title>typed-voice-server</title>
+  <link rel="stylesheet" href="./server-ui.css">
+</head>
+<body>
+  <main class="server-shell">
+    <header class="server-header">
+      <div>
+        <p class="server-kicker">typed-voice-server</p>
+        <h1>音声合成サーバー</h1>
+        <p>接続用QR、複数Chromeの稼働状況、接続セッション、合成履歴を確認できます。</p>
+      </div>
+      <span id="server-overall-status" class="server-status-pill" data-state="waiting">ローカルサーバーを確認中</span>
+    </header>
+    <section class="server-grid">
+      <article class="server-card server-pairing-card" aria-labelledby="server-pairing-title">
+        <div class="server-card-heading">
+          <div>
+            <p class="server-kicker">接続</p>
+            <h2 id="server-pairing-title">このQRを端末で読み取ります</h2>
+          </div>
+          <span id="server-pairing-version" class="server-meta">接続情報待ち</span>
+        </div>
+        <div class="server-qr-stage">
+          <canvas id="server-pairing-qr" width="320" height="320" aria-label="typed-voice接続用QR"></canvas>
+          <div id="server-pairing-placeholder" class="server-qr-placeholder">Tunnelと音声エンジンの準備が終わると、ここにQRを常時表示します。</div>
+        </div>
+        <dl class="server-pairing-summary">
+          <div><dt>公開先</dt><dd id="server-pairing-endpoint">未準備</dd></div>
+          <div><dt>暗号化</dt><dd>AES-256-GCM / HMAC-SHA-256 / HKDF-SHA-256</dd></div>
+        </dl>
+        <p class="server-note">接続鍵は画面の文字列やログには表示しません。QRはブラウザ内で生成し、payloadを外部サービスへ送信しません。</p>
+      </article>
+      <article class="server-card" aria-labelledby="server-state-title">
+        <div class="server-card-heading"><div><p class="server-kicker">状況</p><h2 id="server-state-title">現在の状態</h2></div></div>
+        <div class="server-state-list">
+          <div class="server-state-row"><span>Cloudflare Tunnel</span><strong id="state-tunnel">待機中</strong></div>
+          <div class="server-state-row"><span>音声合成用Chrome</span><strong id="state-chrome">待機中</strong></div>
+          <div class="server-state-row"><span>WebMCP</span><strong id="state-webmcp">待機中</strong></div>
+          <div class="server-state-row"><span>音声モデル</span><strong id="state-model">待機中</strong></div>
+          <div class="server-state-row"><span>Worker control</span><strong id="state-control">待機中</strong></div>
+          <div class="server-state-row"><span>Admin sandbox</span><strong id="state-admin-worker">待機中</strong></div>
+          <div class="server-state-row"><span>Public WSS sandbox</span><strong id="state-public-worker">待機中</strong></div>
+          <div class="server-state-row"><span>認証済み端末</span><strong id="state-client">0</strong></div>
+          <div class="server-state-row"><span>合成中 / 待機</span><strong id="state-work">0 / 0</strong></div>
+        </div>
+        <form id="server-model-form" class="server-model-form">
+          <label for="server-model-profile">サーバー音声モデル</label>
+          <select id="server-model-profile">
+            <option value="fp32">最高品質 / FP32</option>
+            <option value="fp16">推奨 / FP16</option>
+            <option value="mobile-int8">低メモリ / INT8</option>
+            <option value="mobile-int4">非推奨 / INT4</option>
+          </select>
+          <button type="submit">変更</button>
+          <span id="server-model-status" class="server-meta">現在のモデルを確認中</span>
+        </form>
+      </article>
+    </section>
+    <section class="server-card" aria-labelledby="server-workers-title">
+      <div class="server-card-heading"><div><p class="server-kicker">Worker browser</p><h2 id="server-workers-title">音声エンジンスロット</h2></div><span id="server-worker-count" class="server-meta">0件</span></div>
+      <div id="server-worker-list" class="server-worker-list"></div>
+    </section>
+    <section class="server-card" aria-labelledby="server-sessions-title">
+      <div class="server-card-heading"><div><p class="server-kicker">セッション</p><h2 id="server-sessions-title">接続セッション</h2></div><span id="server-session-count" class="server-meta">0件</span></div>
+      <div id="server-session-list" class="server-session-list"></div>
+      <div id="server-session-empty" class="server-history-empty"><strong>接続セッションはありません</strong><span>端末が暗号化通信を開始するとここへ表示します。</span></div>
+    </section>
+    <section class="server-card server-history-card" aria-labelledby="server-history-title">
+      <div class="server-card-heading"><div><p class="server-kicker">履歴</p><h2 id="server-history-title">UUID指定の合成履歴</h2></div><span id="server-history-count" class="server-meta">未選択</span></div>
+      <form id="server-history-form" class="server-history-form">
+        <label for="server-history-uuid">会話UUID</label>
+        <input id="server-history-uuid" type="text" autocomplete="off" spellcheck="false" placeholder="conversation UUID">
+        <button type="submit">取得して監視</button>
+      </form>
+      <div id="server-history-metadata" class="server-history-metadata" hidden></div>
+      <div id="server-history-list" class="server-history-list"></div>
+      <div id="server-history-empty" class="server-history-empty"><strong>UUIDを指定してください</strong><span>指定した会話のメタデータと内容だけをサーバーから取得し、そのUUIDだけリアルタイム監視します。</span></div>
+    </section>
+    <section class="server-card" aria-labelledby="server-debug-title">
+      <div class="server-card-heading"><div><p class="server-kicker">Browser debug</p><h2 id="server-debug-title">ブラウザ内JavaScript実行</h2></div><span class="server-meta">管理WebSocket限定</span></div>
+      <form id="server-debug-form" class="server-debug-form">
+        <label for="server-debug-slot">slot</label>
+        <input id="server-debug-slot" type="number" min="0" step="1" value="0">
+        <textarea id="server-debug-expression" spellcheck="false" placeholder="document.title"></textarea>
+        <button type="submit">実行</button>
+      </form>
+      <pre id="server-debug-result" class="server-debug-result">未実行</pre>
+    </section>
+  </main>
+  <template id="server-history-template"><article class="server-history-row"><time class="server-history-time"></time><p class="server-history-text"></p><span class="server-history-result"></span></article></template>
+  <template id="server-session-template"><article class="server-session-row"><div><strong class="server-session-id"></strong><span class="server-session-seen"></span></div><span class="server-session-count-value"></span><p class="server-session-text"></p><div class="server-session-actions"><button class="server-session-history" type="button">履歴</button><button class="server-session-disconnect" type="button">切断</button></div></article></template>
+  <template id="server-worker-template"><article class="server-worker-row"><strong class="server-worker-name"></strong><span class="server-worker-state"></span><span class="server-worker-backend"></span></article></template>
+  <script type="module" src="./server-ui.js"></script>
+</body>
+</html>
