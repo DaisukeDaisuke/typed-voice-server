@@ -79,14 +79,17 @@ function normalizeWebMcp(value) {
 }
 
 class EngineTab {
-  constructor({ index, target, startupTimeoutMs, onDisconnect = () => {} }) {
+  constructor({ index, target, startupTimeoutMs, onDisconnect = () => {}, onDiagnostic = () => {} }) {
     this.index = index;
     this.target = target;
     this.startupTimeoutMs = startupTimeoutMs;
     this.onDisconnect = onDisconnect;
+    this.onDiagnostic = onDiagnostic;
     this.cdp = null;
     this.busy = false;
     this.info = null;
+    this.fatalError = null;
+    this.lastDiagnostic = null;
   }
 
   async start() {
@@ -96,10 +99,40 @@ class EngineTab {
         this.busy = false;
         this.onDisconnect(this.index);
       },
+      onEvent: (method, params) => this.#acceptCdpEvent(method, params),
+      onProtocolError: (error) => {
+        this.fatalError = error;
+        this.#reportDiagnostic(error.message);
+      },
     });
     await this.cdp.connect(10_000);
-    await Promise.all([this.cdp.send("Page.enable"), this.cdp.send("Runtime.enable")]);
+    await Promise.all([this.cdp.send("Page.enable"), this.cdp.send("Runtime.enable"), this.cdp.send("Log.enable")]);
     await this.#waitUntilReady(Date.now() + this.startupTimeoutMs);
+  }
+
+  #reportDiagnostic(message) {
+    const normalized = String(message ?? "").trim();
+    if (!normalized || normalized === this.lastDiagnostic) return;
+    this.lastDiagnostic = normalized;
+    this.onDiagnostic(normalized);
+  }
+
+  #acceptCdpEvent(method, params) {
+    if (method === "Runtime.exceptionThrown") {
+      const details = params?.exceptionDetails;
+      const message = details?.exception?.description ?? details?.text ?? "browser exception";
+      this.fatalError = new Error(`engine tab ${this.index}: ${message}`);
+      this.#reportDiagnostic(this.fatalError.message);
+      return;
+    }
+    if (method === "Runtime.consoleAPICalled" && ["error", "warning"].includes(params?.type)) {
+      const message = (params.args ?? []).map((argument) => argument.value ?? argument.description ?? argument.type).join(" ");
+      this.#reportDiagnostic(`browser console ${params.type}: ${message}`);
+      return;
+    }
+    if (method === "Log.entryAdded" && ["error", "warning"].includes(params?.entry?.level)) {
+      this.#reportDiagnostic(`browser ${params.entry.level}: ${params.entry.text ?? "log entry"}`);
+    }
   }
 
   async #callWebMcp(toolName, input = {}, timeoutMs = 600_000) {
@@ -129,20 +162,42 @@ class EngineTab {
   async #waitUntilReady(deadline) {
     let lastError;
     while (Date.now() < deadline) {
+      if (this.fatalError) throw this.fatalError;
+      let raw;
       try {
-        const raw = await this.#callWebMcp("typed-voice.status", {}, 5000);
-        const status = typeof raw === "string" ? JSON.parse(raw) : raw;
-        if (status?.error) throw new Error(status.error);
-        if (status?.ready) {
-          this.info = status;
-          return;
-        }
+        raw = await this.#callWebMcp("typed-voice.status", {}, 5000);
       } catch (error) {
         lastError = error;
+        this.#reportDiagnostic(`WebMCP待機中: ${error instanceof Error ? error.message : String(error)}`);
+        const pageFailure = await this.#readPageFailure().catch((diagnosticError) => {
+          this.#reportDiagnostic(`ページ状態取得失敗: ${diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError)}`);
+          return null;
+        });
+        if (pageFailure) throw new Error(pageFailure);
+        await sleep(200);
+        continue;
+      }
+      const status = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (status?.error) throw new Error(`engine tab ${this.index}: ${status.error}`);
+      if (status?.ready) {
+        this.info = status;
+        return;
       }
       await sleep(200);
     }
     throw new Error(`engine tab ${this.index} did not become ready: ${lastError?.message ?? "timeout"}`);
+  }
+
+  async #readPageFailure() {
+    const result = await this.cdp.send("Runtime.evaluate", {
+      expression: "document.getElementById('server-engine-status')?.textContent || ''",
+      returnByValue: true,
+    }, 5000);
+    if (result.exceptionDetails) {
+      throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text ?? "page status evaluation failed");
+    }
+    const status = String(result.result?.value ?? "");
+    return status.startsWith("起動失敗:") ? `engine tab ${this.index}: ${status}` : null;
   }
 
   async synthesize(id, text) {
@@ -187,13 +242,14 @@ class EngineTab {
 }
 
 export class ChromeEnginePool {
-  constructor({ count = 1, chromePath, engineUrl, startupTimeoutMs = 600_000, onState = () => {}, profileDir = null, processTracker = null }) {
+  constructor({ count = 1, chromePath, engineUrl, startupTimeoutMs = 600_000, onState = () => {}, onDiagnostic = () => {}, profileDir = null, processTracker = null }) {
     if (!Number.isSafeInteger(count) || count < 1 || count > 8) throw new Error("multi must be 1..8");
     this.count = count;
     this.chromePath = chromePath;
     this.engineUrl = engineUrl;
     this.startupTimeoutMs = startupTimeoutMs;
     this.onState = onState;
+    this.onDiagnostic = onDiagnostic;
     if (!profileDir) throw new Error("profileDir is required so the Chrome model cache survives restarts");
     this.profileDir = profileDir;
     this.processTracker = processTracker;
@@ -275,6 +331,7 @@ export class ChromeEnginePool {
       target: firstTarget,
       startupTimeoutMs: this.startupTimeoutMs,
       onDisconnect: () => this.#notifySlots(),
+      onDiagnostic: (message) => this.onDiagnostic({ index: 0, message }),
     });
     this.engines.push(first);
     await first.start();
@@ -290,6 +347,7 @@ export class ChromeEnginePool {
           target,
           startupTimeoutMs: this.startupTimeoutMs,
           onDisconnect: () => this.#notifySlots(),
+          onDiagnostic: (message) => this.onDiagnostic({ index, message }),
         });
         this.engines.push(engine);
         await engine.start();

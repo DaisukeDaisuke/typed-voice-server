@@ -438,6 +438,9 @@ try {
     engineUrl: engineBaseUrl.href,
     profileDir: chromeProfileDirectory,
     onState: updateState,
+    onDiagnostic({ index, message }) {
+      process.stderr.write(`[engine:${index}] ${String(message).replace(/[\r\n]+/g, " ")}\n`);
+    },
     processTracker: processWatchdog,
   });
   controlServer = new WorkerControlServer({

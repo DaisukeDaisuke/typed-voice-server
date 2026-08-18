@@ -5,9 +5,11 @@ function protocolError(method, error) {
 }
 
 export class CdpClient {
-  constructor(url, { onClose = () => {} } = {}) {
+  constructor(url, { onClose = () => {}, onEvent = () => {}, onProtocolError = () => {} } = {}) {
     this.url = url;
     this.onClose = onClose;
+    this.onEvent = onEvent;
+    this.onProtocolError = onProtocolError;
     this.socket = null;
     this.nextId = 1;
     this.pending = new Map();
@@ -31,9 +33,16 @@ export class CdpClient {
 
   #onMessage(data) {
     let message;
-    try { message = JSON.parse(typeof data === "string" ? data : String(data)); }
-    catch { return; }
-    if (!Object.hasOwn(message, "id")) return;
+    try {
+      message = JSON.parse(typeof data === "string" ? data : String(data));
+    } catch (error) {
+      this.onProtocolError(new Error(`invalid CDP message: ${error instanceof Error ? error.message : String(error)}`));
+      return;
+    }
+    if (!Object.hasOwn(message, "id")) {
+      this.onEvent(String(message.method ?? ""), message.params ?? {});
+      return;
+    }
     const pending = this.pending.get(message.id);
     if (!pending) return;
     this.pending.delete(message.id);
