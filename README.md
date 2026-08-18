@@ -11,6 +11,7 @@
 現在tokenだけを`data/worker/session-token.txt`へ`0600`で原子的に上書きし、起動時とローテーション時に絶対ファイルパス・有効期限・token入りWorker login URLをstdioへ表示します。対応terminalではOSC 8 hyperlinkとしてクリック可能にし、非対応terminalでも完全URLを読める形で出力します。管理tokenも起動時にtoken入りAdmin login URLとしてstdioへ表示します。サーバー停止時にtoken fileを削除します。
 Worker参加者は`/worker/login#<session-token.txtの内容>`を開きます。fragmentはHTTP URLへ送られず、login bootstrapが同一originの`POST /worker/session`本文としてTLS内でtokenを送信します。正しい場合だけHttpOnly・SameSite=StrictのWorker Cookieを発行します。Cookieのtokenが現在windowまたは30秒grace内の直前windowと一致しない場合、Worker assetsと`/worker/ws` WebSocket Upgradeは拒否されます。すでに確立済みの暗号化Worker WSSは10分境界で強制切断せず、新規参加・再接続だけ最新tokenを要求します。
 緊急失効用に起動ごとに別の64-byte random secretを生成し、`data/worker/reset-token.txt`へ改行なし128桁hex・`0600`で保存します。この値を`POST /worker/reset`本文へそのまま送るとWorker access secret自体を即時再生成し、現在の10分token/Cookieを無効化し、接続済みWorkerも切断して新tokenを同じsession-token fileとstdioへ即時発行します。誤ったreset tokenには404だけを返し、reset secret本体はstdioへ出しません。
+通常はreset secretを引数やstdioへ出さず、`node scripts/reset-worker-access.mjs`を実行すればローカルのreset-token fileを読み、`127.0.0.1:3000`へPOSTして同じ緊急失効を行えます。別portで起動した場合だけ`--port`を指定します。
 Workerは合成対象テキストと生成音声を扱えるため、Worker接続トークンは信頼できる参加者だけへ渡します。任意第三者Worker、reputation、多数決による偽音声検出はこの構成の信頼境界に含めません。
 ## Trusted Worker暗号化セッション
 Worker参加時にブラウザとNode.jsはP-256 ECDHの一時鍵ペアを生成し、WSS上で公開鍵と32-byte nonceを交換します。共有秘密からHKDF-SHA-256で方向別AES-256-GCM鍵、方向別4-byte nonce prefix、proof keyを派生し、双方のHMAC-SHA-256 proofが一致した後だけWorkerセッションを有効化します。Worker秘密鍵はブラウザセッション外へ保存しません。
