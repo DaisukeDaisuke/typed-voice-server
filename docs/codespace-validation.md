@@ -27,7 +27,8 @@ Windows実機でChrome起動やプロセス管理を自動化せず、Node.jsサ
 3. `session-token.txt`の内容を使って`/admin/login#<token>`へアクセスし、fragmentがHTTP URLへ送信されず、同一originの`POST /admin/session`成功後にCookie付き`/admin/`だけが表示されることを確認する。
 4. token/Cookieなしの`/admin/ws` Upgradeが拒否されることを確認する。
 5. 認証済み管理ページが実際のCodespaces originをサーバーへ通知し、`data/pairing/typed-voice-server.tvrkey`がそのhostの`wss://.../remote`で生成されることを確認する。
-6. 検証後は`codespace__close_temporary_public_deployment`で3000をprivateへ戻す。
+6. Codespaces relayがbackendの`Origin`を`http://localhost:3000`へ書き換える場合でも、`X-Forwarded-Host`/`X-Forwarded-Proto`から復元したoriginが設定済みpublic originと厳密一致する場合だけAdmin/Worker sessionとWSSを受理することを確認する。別hostをforwardした要求は拒否する。
+7. 検証後は`codespace__close_temporary_public_deployment`で3000をprivateへ戻す。
 ## Cloudflare Quick Tunnel実経路
 1. 同じCodespaceで`cloudflared tunnel --url http://localhost:3000`を起動する。
 2. 発行された`https://<random>.trycloudflare.com/admin/login#<token>`を開く。
@@ -44,6 +45,17 @@ Windows実機でChrome起動やプロセス管理を自動化せず、Node.jsサ
 7. モデル準備中でもPING/PONGへ即応し、モデルダウンロード時間を死活timeoutとして誤判定しないことを確認する。
 8. モデル準備完了後に管理画面のWorker一覧がreadyになることを確認する。
 9. Workerブラウザを追加で認証・参加すると固定上限数ではなく参加数に応じてWorkerが増えることを確認する。
+10. 同一ブラウザcontextで2タブを同じmodel profileへ同時参加させる。最初のタブだけがHugging Faceのmodel assetsを外部GETし、2枚目はmanifest取得後にService Workerのdownload lockを待つことを確認する。
+11. 最初のタブのdownload/検証完了後、2枚目が外部model assetsを再downloadせず`/__typed_voice_assets/...`の共有Cache Storageから読み、自分自身のWebGPU/WASM engineを独立初期化することを確認する。モデル実体・推論workerはタブ間共有しない。
+12. `/health`の`workers`が2になり、両タブがreadyになることを確認する。
+## Worker接続の緊急失効
+1. 起動時に`data/worker/reset-token.txt`が生成され、改行なし128桁小文字hex、POSIXでは0600であることを確認する。reset secret本体はstdioへ出さない。
+2. `POST /worker/reset`は`127.0.0.1`/`::1`からの直接接続だけを受け付けることを確認する。`Forwarded`または`X-Forwarded-*`付きのreverse proxy要求は、正しいreset secretでも404にする。
+3. `node scripts/reset-worker-access.mjs`を実行し、reset secretを引数/stdoutへ露出せずlocalhostへPOSTできることを確認する。
+4. reset直前に2 Workerを接続した状態でhelperを実行し、`/health`が`workers: 2`から`workers: 0`へ変化し、両WSSが1008で切断されることを確認する。
+5. reset前の10分tokenとWorker Cookieが即時無効化され、旧Cookieのまま再参加してもWSS Upgradeが拒否されることを確認する。
+6. Worker UIは1008切断時に「Worker接続認証が失効しました。現在のWorker接続URLから認証し直してください。」を表示し、古いCookieでの再参加ボタンを無効化することを確認する。
+7. `data/worker/session-token.txt`だけが新しいtokenへ即時更新され、reset-token自体は同じserver process中は変化せず、stdioへ新しいWorker login URLが出ることを確認する。
 ## Worker障害と再割当
 1. 合成要求を1台のWorkerへ割り当てる直前にPING/PONGが成功していることを確認する。
 2. 合成中Workerを閉じ、PING timeoutまたはWSS closeで死亡扱いになることを確認する。
@@ -55,9 +67,12 @@ Windows実機でChrome起動やプロセス管理を自動化せず、Node.jsサ
 3. Worker→Node.jsは暗号化WorkerセッションでFloat32 audio metadataと64KiB以下のchunksを返すことを確認する。
 4. Node.js→Remoteクライアントは選択されたFloat32LEまたはPCM16LE monoでAUDIO START/ENDを返すことを確認する。
 5. UUID履歴へrequest/resultが記録され、管理画面は選択UUIDだけを取得・購読することを確認する。
+6. ready Workerを2台接続した状態でRemote TEXTを2件連続投入し、2台へ同時割当されることを確認する。それぞれのAUDIOで`Float32 byteLength == sampleCount * 4`を満たし、両要求が独立して完了することを確認する。
 ## 完了条件
 - Codespaces公開経路とtrycloudflare実経路の両方で同じNode.jsサーバーが動く。
 - 管理セッショントークンなしでは管理HTMLと管理WSSへ到達できない。
 - Worker assetsとWorker WSSは10分接続tokenを持つ信頼済み参加者だけに開き、認証後の明示参加で暗号化セッションとPING死活監視が成立する。
+- 同一PCの複数WorkerはモデルdownloadだけをService Workerで束ね、各タブのmodel load/WebGPU推論は独立する。
+- localhost専用reset secretでWorker accessを即時失効でき、接続済みWorker・旧token・旧Cookieがその場で無効になる。
 - Worker脱落時にジョブが別Workerへ再割当される。
 - pairing fileをCodespaceから取得し、実クライアントのRemote TEXT→AUDIOまで通る。
