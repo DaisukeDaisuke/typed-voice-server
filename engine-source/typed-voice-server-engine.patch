@@ -31,7 +31,7 @@ new file mode 100644
 index 0000000..2222222
 --- /dev/null
 +++ b/src/server-engine.js
-@@ -0,0 +1,150 @@
+@@ -0,0 +1,168 @@
 +import "./poc.css";
 +import { EngineClient } from "./engine/engine-client.js";
 +import { requireServiceWorker } from "./app/service-worker-required.js";
@@ -55,7 +55,25 @@ index 0000000..2222222
 +  manifestUrl,
 +  appBaseUrl,
 +  onProgress(message) {
-+    if (message.stage === "initialize" && message.phase) statusElement.textContent = `音声エンジン: ${message.phase}`;
++    if (message.stage === "download") {
++      const loaded = Number(message.loadedBytes || 0);
++      const total = Number(message.totalBytes || 0);
++      const percentage = total > 0 ? ((loaded / total) * 100).toFixed(1) : "?";
++      statusElement.textContent = `取得・検証: ${message.assetId || "asset"} ${(loaded / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MiB (${percentage}%)`;
++    } else if (message.stage === "generate") {
++      statusElement.textContent = `OmniVoice生成: step ${message.step}/${message.numStep}, masked=${message.remaining}`;
++    } else if (message.stage === "initialize") {
++      if (message.phase === "verifying-cache" || message.phase === "verified-cache") {
++        const loaded = Number(message.loadedBytes || 0);
++        const total = Number(message.totalBytes || 0);
++        const percentage = total > 0 ? ((loaded / total) * 100).toFixed(1) : "?";
++        statusElement.textContent = `保存済み音声をXXH3-128再検証: ${message.assetId || "asset"} ${(loaded / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MiB (${percentage}%)`;
++      } else if (message.phase === "backend-failed") {
++        statusElement.textContent = `エンジン初期化: ${message.backend || "backend"} 失敗: ${message.message || "詳細なし"}`;
++      } else {
++        statusElement.textContent = `エンジン初期化: ${message.phase}${message.backend ? ` (${message.backend})` : ""}`;
++      }
++    }
 +  },
 +});
 +const generations = new Map();
