@@ -409,7 +409,17 @@ export class OrchestratorHttpServer {
     const configured = this.publicOriginProvider();
     if (!configured) return false;
     try {
-      return supplied === new URL(String(configured)).origin;
+      const configuredOrigin = new URL(String(configured)).origin;
+      if (supplied === configuredOrigin) return true;
+      if (direct !== configuredOrigin) return false;
+      const internal = new URL(supplied);
+      const internalHost = internal.hostname.toLowerCase();
+      const loopback = internalHost === "localhost" || internalHost === "127.0.0.1" || internalHost === "[::1]" || internalHost === "::1";
+      const address = this.server?.address();
+      const listeningPort = address && typeof address === "object" ? address.port : this.port;
+      return internal.protocol === "http:"
+        && loopback
+        && Number(internal.port || 80) === listeningPort;
     } catch {
       return false;
     }

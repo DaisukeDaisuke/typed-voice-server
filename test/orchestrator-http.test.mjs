@@ -12,11 +12,13 @@ const sessionToken = "a".repeat(64);
 const workerToken = "c".repeat(128);
 const workerResetToken = "e".repeat(128);
 
-function httpRequest(port, { method = "GET", path, cookie = null, origin = null, body = null }) {
+function httpRequest(port, { method = "GET", path, cookie = null, origin = null, forwardedHost = null, forwardedProto = null, body = null }) {
   return new Promise((resolvePromise, rejectPromise) => {
     const headers = {};
     if (cookie) headers.Cookie = cookie;
     if (origin) headers.Origin = origin;
+    if (forwardedHost) headers["X-Forwarded-Host"] = forwardedHost;
+    if (forwardedProto) headers["X-Forwarded-Proto"] = forwardedProto;
     if (body !== null) {
       headers["Content-Type"] = "text/plain;charset=UTF-8";
       headers["Content-Length"] = String(Buffer.byteLength(body));
@@ -42,7 +44,7 @@ function httpRequest(port, { method = "GET", path, cookie = null, origin = null,
   });
 }
 
-function websocketUpgrade(port, cookie = null, origin = null, path = "/admin/ws") {
+function websocketUpgrade(port, cookie = null, origin = null, path = "/admin/ws", forwardedHost = null, forwardedProto = null) {
   return new Promise((resolvePromise, rejectPromise) => {
     const socket = net.createConnection({ host: "127.0.0.1", port });
     const timer = setTimeout(() => {
@@ -69,6 +71,8 @@ function websocketUpgrade(port, cookie = null, origin = null, path = "/admin/ws"
       ];
       if (cookie) headers.push(`Cookie: ${cookie}`);
       if (origin) headers.push(`Origin: ${origin}`);
+      if (forwardedHost) headers.push(`X-Forwarded-Host: ${forwardedHost}`);
+      if (forwardedProto) headers.push(`X-Forwarded-Proto: ${forwardedProto}`);
       socket.write(`${headers.join("\r\n")}\r\n\r\n`);
     });
     socket.once("data", (chunk) => settle(chunk.toString("latin1")));
@@ -197,6 +201,26 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     });
     assert.equal(publicWorker.statusCode, 204);
 
+    const proxiedWorker = await httpRequest(port, {
+      method: "POST",
+      path: "/worker/session",
+      origin: `http://localhost:${port}`,
+      forwardedHost: "public.example",
+      forwardedProto: "https",
+      body: workerToken,
+    });
+    assert.equal(proxiedWorker.statusCode, 204);
+
+    const forgedProxyWorker = await httpRequest(port, {
+      method: "POST",
+      path: "/worker/session",
+      origin: `http://localhost:${port}`,
+      forwardedHost: "attacker.invalid",
+      forwardedProto: "https",
+      body: workerToken,
+    });
+    assert.equal(forgedProxyWorker.statusCode, 404);
+
     const rejectedReset = await httpRequest(port, {
       method: "POST",
       path: "/worker/reset",
@@ -230,6 +254,10 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     assert.equal(workerUpgradeCalls, 1);
     await websocketUpgrade(port, workerCookie, "https://public.example", "/worker/ws");
     assert.equal(workerUpgradeCalls, 2);
+    await websocketUpgrade(port, workerCookie, `http://localhost:${port}`, "/worker/ws", "public.example", "https");
+    assert.equal(workerUpgradeCalls, 3);
+    await websocketUpgrade(port, workerCookie, `http://localhost:${port}`, "/worker/ws", "attacker.invalid", "https");
+    assert.equal(workerUpgradeCalls, 3);
   } finally {
     await server.close();
   }
