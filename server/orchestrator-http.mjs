@@ -144,6 +144,7 @@ export class OrchestratorHttpServer {
     onModelSet = async () => {},
     onPublicOrigin = async () => {},
     publicOriginProvider = () => null,
+    onDiagnostic = () => {},
     workerResetToken = null,
     onWorkerReset = async () => {},
     workerTokenValidator = () => false,
@@ -166,6 +167,7 @@ export class OrchestratorHttpServer {
     this.onModelSet = onModelSet;
     this.onPublicOrigin = onPublicOrigin;
     this.publicOriginProvider = publicOriginProvider;
+    this.onDiagnostic = onDiagnostic;
     this.workerResetToken = String(workerResetToken ?? "");
     if (this.workerResetToken && !/^[0-9a-f]{128}$/.test(this.workerResetToken)) {
       throw new Error("worker reset token must be 128 lowercase hex characters");
@@ -299,11 +301,13 @@ export class OrchestratorHttpServer {
     }
     if (request.method === "POST" && url.pathname === "/worker/session") {
       if (!this.#originAllowed(request)) {
+        this.onDiagnostic(`worker session rejected: reason=origin supplied=${JSON.stringify(String(request.headers.origin ?? ""))} direct=${JSON.stringify(requestOrigin(request))} configured=${JSON.stringify(this.publicOriginProvider())}`);
         noAccess(response);
         return;
       }
       const supplied = await readBoundedTextBody(request, 256).catch(() => "");
       if (!this.workerTokenValidator(supplied)) {
+        this.onDiagnostic("worker session rejected: reason=token");
         noAccess(response);
         return;
       }

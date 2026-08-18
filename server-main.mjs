@@ -411,6 +411,9 @@ try {
     },
     onModelSet: setServerModelProfile,
     onPublicOrigin: setPublicOrigin,
+    onDiagnostic(message) {
+      process.stderr.write(`[http] ${String(message).replace(/[\r\n]+/g, " ")}\n`);
+    },
     publicOriginProvider() {
       return acceptedPublicOrigin;
     },
