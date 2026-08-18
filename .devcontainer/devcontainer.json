@@ -1,0 +1,27 @@
+{
+  "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
+  "name": "typed-voice-server",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "privileged": true,
+  "features": {
+    "ghcr.io/devcontainers/features/node:2": {
+      "version": "22",
+      "npmVersion": "10.9.8"
+    },
+    "ghcr.io/devcontainers/features/rust:1": {
+      "version": "1.85",
+      "profile": "minimal",
+      "targets": "wasm32-unknown-unknown",
+      "components": "rustfmt,clippy"
+    }
+  },
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": {
+      "label": "typed-voice-server",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "remoteUser": "vscode"
+}

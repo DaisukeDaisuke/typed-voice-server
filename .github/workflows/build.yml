@@ -15,10 +15,15 @@ jobs:
       - uses: actions/checkout@v7
       - name: Initialize typed-voice submodule only
         run: git submodule update --init --recursive --depth 1 typed-voice
-      - name: Add server-only browser entry
+      - name: Add trusted worker browser entry
         run: |
-          if [ ! -f typed-voice/server-engine.html ] || [ ! -f typed-voice/src/server-engine.js ]; then
-            git -C typed-voice apply ../engine-source/typed-voice-server-engine.patch
+          cp engine-source/server-engine.html typed-voice/server-engine.html
+          cp engine-source/server-engine.js typed-voice/src/server-engine.js
+          if git -C typed-voice apply --check ../engine-source/vite-server-entry.patch; then
+            git -C typed-voice apply ../engine-source/vite-server-entry.patch
+          elif ! grep -Fq 'serverEngine: resolve(rootDirectory, "server-engine.html")' typed-voice/vite.config.js; then
+            echo 'Unable to apply trusted Worker Vite entry patch.' >&2
+            exit 1
           fi
       - uses: actions/setup-node@v7
         with:
@@ -66,13 +71,14 @@ jobs:
         run: |
           mkdir -p dist/typed-voice-server/engine
           cp server-main.mjs package.json README.md LICENSE dist/typed-voice-server/
-          cp -R server admin worker web docs dist/typed-voice-server/
+          cp -R server worker web docs dist/typed-voice-server/
           cp -R typed-voice/dist/. dist/typed-voice-server/engine/
           cat > dist/RELEASE_NOTES.md <<'EOF'
           CI-built typed-voice-server runtime.
 
           The archive contains prebuilt browser assets. Runtime npm installation is not required.
-          Python and Codespaces are not required.
+          Trusted browser workers join through token-gated /worker/ and are not started by the Node.js server.
+          Python, Codex and Codespaces are not runtime requirements.
           EOF
           cd dist
           zip -r typed-voice-server.zip typed-voice-server

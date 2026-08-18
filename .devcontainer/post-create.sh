@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+CODEX_VERSION="0.147.0"
+CLOUDFLARED_VERSION="2026.8.2"
+
+printf '\n[typed-voice-server] Installing Codex CLI...\n'
+npm install -g "@openai/codex@${CODEX_VERSION}"
+sudo ln -sf "$(command -v node)" /usr/local/bin/node
+sudo ln -sf "$(command -v codex)" /usr/local/bin/codex
+printf '\n[typed-voice-server] Preparing Codex elevated sandbox helper for the Codespace user...\n'
+sudo codex sandbox setup --elevated --current-user
+
+printf '\n[typed-voice-server] Installing cloudflared...\n'
+case "$(uname -m)" in
+  x86_64) cloudflared_arch="amd64" ;;
+  aarch64|arm64) cloudflared_arch="arm64" ;;
+  *) printf 'Unsupported cloudflared architecture: %s\n' "$(uname -m)" >&2; exit 1 ;;
+esac
+tmp_cloudflared="$(mktemp)"
+trap 'rm -f "$tmp_cloudflared"' EXIT
+curl -L --fail --retry 3 \
+  "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-${cloudflared_arch}" \
+  -o "$tmp_cloudflared"
+sudo install -m 0755 "$tmp_cloudflared" /usr/local/bin/cloudflared
+rm -f "$tmp_cloudflared"
+trap - EXIT
+
+printf '\n[typed-voice-server] Initializing typed-voice browser engine sources...\n'
+git submodule update --init --recursive typed-voice
+cp engine-source/server-engine.html typed-voice/server-engine.html
+cp engine-source/server-engine.js typed-voice/src/server-engine.js
+if git -C typed-voice apply --check ../engine-source/vite-server-entry.patch; then
+  git -C typed-voice apply ../engine-source/vite-server-entry.patch
+elif ! grep -Fq 'serverEngine: resolve(rootDirectory, "server-engine.html")' typed-voice/vite.config.js; then
+  printf 'Unable to apply volunteer Worker Vite entry patch.\n' >&2
+  exit 1
+fi
+
+printf '\n[typed-voice-server] Preparing typed-voice dependencies and Kanalizer assets...\n'
+(
+  cd typed-voice
+  bash .devcontainer/post-create.sh
+  npm run build
+)
+
+printf '\n[typed-voice-server] Installing built volunteer Worker assets...\n'
+rm -rf engine.next
+mkdir -p engine.next
+cp -R typed-voice/dist/. engine.next/
+rm -rf engine
+mv engine.next engine
+
+printf '\n[typed-voice-server] Running Node core tests...\n'
+node --test test/*.test.mjs
+
+printf '\n[typed-voice-server] Ready.\n'
+printf '  codex:       %s\n' "$(codex --version)"
+printf '  cloudflared: %s\n' "$(cloudflared --version)"
+printf '  server:      node server-main.mjs --host 0.0.0.0 --port 3000\n'

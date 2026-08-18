@@ -1,6 +1,3 @@
 [submodule "typed-voice"]
 	path = typed-voice
 	url = https://github.com/DaisukeDaisuke/typed-voice.git
-[submodule "local-mcp-chatgpt-tunnel"]
-	path = local-mcp-chatgpt-tunnel
-	url = git@github.com:DaisukeDaisuke/local-mcp-chatgpt-tunnel.git

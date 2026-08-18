@@ -13,7 +13,7 @@
       <div>
         <p class="server-kicker">typed-voice-server</p>
         <h1>音声合成サーバー</h1>
-        <p>接続用QR、複数Chromeの稼働状況、接続セッション、合成履歴を確認できます。</p>
+        <p>接続用QR、認証済みのTrusted WebGPU Worker、接続セッション、合成履歴を確認できます。</p>
       </div>
       <span id="server-overall-status" class="server-status-pill" data-state="waiting">ローカルサーバーを確認中</span>
     </header>
@@ -28,7 +28,7 @@
         </div>
         <div class="server-qr-stage">
           <canvas id="server-pairing-qr" width="320" height="320" aria-label="typed-voice接続用QR"></canvas>
-          <div id="server-pairing-placeholder" class="server-qr-placeholder">Tunnelと音声エンジンの準備が終わると、ここにQRを常時表示します。</div>
+          <div id="server-pairing-placeholder" class="server-qr-placeholder">公開経路が確定すると、ここにQRを常時表示します。音声合成は接続トークンで認証済みのTrusted Workerが担当します。</div>
         </div>
         <dl class="server-pairing-summary">
           <div><dt>公開先</dt><dd id="server-pairing-endpoint">未準備</dd></div>
@@ -39,13 +39,9 @@
       <article class="server-card" aria-labelledby="server-state-title">
         <div class="server-card-heading"><div><p class="server-kicker">状況</p><h2 id="server-state-title">現在の状態</h2></div></div>
         <div class="server-state-list">
-          <div class="server-state-row"><span>Cloudflare Tunnel</span><strong id="state-tunnel">待機中</strong></div>
-          <div class="server-state-row"><span>音声合成用Chrome</span><strong id="state-chrome">待機中</strong></div>
-          <div class="server-state-row"><span>WebMCP</span><strong id="state-webmcp">待機中</strong></div>
+          <div class="server-state-row"><span>公開経路</span><strong id="state-tunnel">待機中</strong></div>
+          <div class="server-state-row"><span>Trusted Worker</span><strong id="state-engine">待機中</strong></div>
           <div class="server-state-row"><span>音声モデル</span><strong id="state-model">待機中</strong></div>
-          <div class="server-state-row"><span>Worker control</span><strong id="state-control">待機中</strong></div>
-          <div class="server-state-row"><span>Admin sandbox</span><strong id="state-admin-worker">待機中</strong></div>
-          <div class="server-state-row"><span>Public WSS sandbox</span><strong id="state-public-worker">待機中</strong></div>
           <div class="server-state-row"><span>認証済み端末</span><strong id="state-client">0</strong></div>
           <div class="server-state-row"><span>合成中 / 待機</span><strong id="state-work">0 / 0</strong></div>
         </div>
@@ -63,7 +59,7 @@
       </article>
     </section>
     <section class="server-card" aria-labelledby="server-workers-title">
-      <div class="server-card-heading"><div><p class="server-kicker">Worker browser</p><h2 id="server-workers-title">音声エンジンスロット</h2></div><span id="server-worker-count" class="server-meta">0件</span></div>
+      <div class="server-card-heading"><div><p class="server-kicker">Trusted browsers</p><h2 id="server-workers-title">認証済みWebGPU Worker</h2></div><span id="server-worker-count" class="server-meta">0件</span></div>
       <div id="server-worker-list" class="server-worker-list"></div>
     </section>
     <section class="server-card" aria-labelledby="server-sessions-title">
@@ -82,16 +78,7 @@
       <div id="server-history-list" class="server-history-list"></div>
       <div id="server-history-empty" class="server-history-empty"><strong>UUIDを指定してください</strong><span>指定した会話のメタデータと内容だけをサーバーから取得し、そのUUIDだけリアルタイム監視します。</span></div>
     </section>
-    <section class="server-card" aria-labelledby="server-debug-title">
-      <div class="server-card-heading"><div><p class="server-kicker">Browser debug</p><h2 id="server-debug-title">ブラウザ内JavaScript実行</h2></div><span class="server-meta">管理WebSocket限定</span></div>
-      <form id="server-debug-form" class="server-debug-form">
-        <label for="server-debug-slot">slot</label>
-        <input id="server-debug-slot" type="number" min="0" step="1" value="0">
-        <textarea id="server-debug-expression" spellcheck="false" placeholder="document.title"></textarea>
-        <button type="submit">実行</button>
-      </form>
-      <pre id="server-debug-result" class="server-debug-result">未実行</pre>
-    </section>
+
   </main>
   <template id="server-history-template"><article class="server-history-row"><time class="server-history-time"></time><p class="server-history-text"></p><span class="server-history-result"></span></article></template>
   <template id="server-session-template"><article class="server-session-row"><div><strong class="server-session-id"></strong><span class="server-session-seen"></span></div><span class="server-session-count-value"></span><p class="server-session-text"></p><div class="server-session-actions"><button class="server-session-history" type="button">履歴</button><button class="server-session-disconnect" type="button">切断</button></div></article></template>

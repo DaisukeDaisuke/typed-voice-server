@@ -1,38 +1,39 @@
 # typed-voice-server
-typed-voiceをPC側のWebGPU/ブラウザ音声エンジンで合成し、Cloudflare Quick Tunnel経由のWSSから利用するローカルサーバーです。
-## セキュリティ境界
-- `server-main.mjs`は通常ユーザー権限の信頼側オーケストレータです。管理HTTP/WebSocketをlistenしません。
-- `worker/websocket-worker.mjs`はCodex offline sandbox内で`127.0.0.1:random`へ公開origin用WebSocketをlistenします。`allow_local_binding=true`ですが非loopback外向き通信は許可しません。
-- `admin/admin-worker.mjs`はpublic workerとは別のCodex offline sandbox内で、49152-65535から初回選択して`data/settings.json`へ保存した固定`127.0.0.1:<high-port>`へ管理HTTP/WebSocketとserver-engine assetsをlistenします。同じoriginを再利用するため、固定ChromeプロファイルのService Worker/Cache Storageとモデルキャッシュも再起動後に再利用できます。管理workerと`server-main.mjs`の通信はstdin/stdout NDJSONだけです。
-- `cloudflared`はCodex `onlineworkspace`で起動し、public workerのloopback portだけをQuick Tunnelへ中継します。`cloudflared`へ`allow_local_binding=true`は付けません。
-- Codex sandboxのpermission profile生成と起動は`server/codex-sandbox-launcher.mjs`へ独立実装しています。`local-mcp-chatgpt-tunnel`は実行時依存ではありません。
-## 通信暗号
-WSS/TLSだけには依存しません。QRには起動ごとに生成する32-byte `authKey`と32-byte `encryptionKey`を入れます。認証はHMAC-SHA-256、セッション鍵派生はHKDF-SHA-256、認証後の通信は方向別AES-256-GCMです。C2S/S2CでAES keyと4-byte nonce prefixを分離し、各方向の8-byte `seq`を連結した12-byte nonceを使用します。20-byte header全体をAADとして認証します。AUTHはWSS接続後20秒以内にHMAC検証成功まで完了する必要があります。
-## QR
-QR payloadはraw UTF-8 JSONです。
-```json
-{"v":1,"u":"wss://xxxxx.trycloudflare.com/remote","a":"<authKey-base64url>","e":"<encryptionKey-base64url>","c":"<checksum-base64url>"}
-```
-`c`は`typed-voice-remote-qr/v1\n`、WSS URL、NUL、raw authKey、raw encryptionKeyを連結したSHA-256の先頭16 bytesです。QR生成は管理ブラウザが固定版jsDelivrライブラリを使ってcanvas上で行い、QR payloadを外部QRサービスへ送信しません。
-## 接続キーファイル
-QRを使えない端末向けに、同じペアリング情報をAES-256-GCMで包んだ`data/pairing/typed-voice-server.tvrkey`を起動ごとに自動生成します。ファイル包み鍵はクライアント実装にも固定で含まれる難読化用であり、通信認証の代わりではありません。実際の通信鍵は起動ごとの`authKey`/`encryptionKey`です。クライアントのpairing画面は`.tvrkey`のraw binaryと、その同一bytesをBase64/Base64URL化したテキストの両方を受け付けます。起動完了時に`realpath`で解決した絶対ファイルパスをコンソールへ表示し、停止時にその起動分のファイルを削除します。
-## 音声転送
-クライアントはハンドシェイク時に`PCM16LE mono`または`Float32LE mono`を選択できます。PC側Chrome/WebMCPはFloat32で合成し、PCM16指定時だけsandbox workerがPCM16LEへ変換します。AUDIOは64KiB単位で分割します。
-## Chrome multi
-`--multi N`はChromeプロセスをN個起動しません。1つの永続`--user-data-dir`を使うChromeプロセスを1つ起動し、その中にserver-engineタブをN枚作ります。最初のタブがService Workerとモデル準備を完了した後に残りのタブを作るため、Cache Storageとモデルキャッシュを共有します。`--disable-background-timer-throttling`、`--disable-backgrounding-occluded-windows`、`--disable-renderer-backgrounding`を指定します。N件までは同時実行し、それを超えた要求はFIFO待ち行列へ入れます。
-## WebMCP
-server-engineページは`typed-voice.status`、`typed-voice.synthesize`、`typed-voice.cancel`を登録します。Node側はChrome DevTools Protocolから`document.modelContext.getTools()`と`executeTool()`を使って呼び出します。音声推論実装をNodeへ複製しません。
-## UUID履歴
-クライアントは認証後の暗号化`SESSION`で会話UUIDを通知します。信頼側は`data/history/index.json`へUUIDメタデータ索引を持ち、内容は`data/history/<uuid>.ndjson`へappend-onlyで保存します。TEXT到着時に`request`イベントを追記し、成功・失敗・キャンセル時に`result`イベントを追記します。管理画面へ履歴本文を常時送信せず、UUID指定の`history-get`でメタデータと内容を取得し、`history-subscribe`中のUUIDだけ新規イベントをリアルタイムpushします。
-## 管理画面
-管理画面自体もCodex sandbox内のadmin workerが配信します。`server-main.mjs`は起動時に32-byte管理tokenを生成し、管理URL fragmentとしてブラウザへ渡します。ブラウザはtokenをsessionStorageへ移してfragmentを即座に消し、同一originの`/admin` WebSocketを認証します。管理画面ではQR、Tunnel、Chrome/WebMCP、各`--multi`スロット、同時処理数、接続セッション、UUID指定履歴、ブラウザ内CDP JavaScriptデバッグ、モデル選択、接続切断を確認できます。選択モデルは`data/settings.json`へ永続化し、次回起動で復元します。
+`typed-voice-server`は1つのNode.jsオーケストレータと、多数の信頼済みブラウザWorkerで音声合成を行うサーバーです。Node.js側はHTTP/WSS、暗号化Remoteクライアント、管理画面、履歴、Worker認証・割当を担当し、WebGPU推論は短寿命Worker接続トークンで認証されたブラウザだけが担当します。
+## 構成
+- `server-main.mjs`は`0.0.0.0:3000`を既定値として、`/admin/`、`/admin/ws`、`/worker/`、`/worker/ws`、`/remote`、`/health`を1つのNode.jsプロセスで提供します。
+- Node.jsサーバー自身はChromeを起動しません。Chrome DevTools Protocol、Chrome PID追跡、Chrome用watchdog、WebMCPは使用しません。
+- Worker browserは一般公開しません。`/worker/login#<current-token>`で短寿命Worker接続トークンをCookieへ交換したブラウザだけが`/worker/`のHTML/JS/WASMと`/worker/ws`へ到達できます。
+- Workerは開いたブラウザごとに動的に増減します。固定`--multi`はありません。
+- Workerが切断またはPING timeoutになった場合、そのWorkerは死亡扱いにし、処理中ジョブは全体timeout内なら待ち行列先頭へ戻して別Workerへ再割当します。
+## Trusted Worker接続認証
+サーバー起動ごとに64-byteのWorker access secretをメモリ内だけで生成し、その秘密と10分単位のtime windowからHMAC-SHA-512の512-bit tokenを導出します。tokenは128桁小文字hexで10分ごとに変化し、window境界の時計ずれ対策として直前tokenは新window開始後30秒間だけ受け付けます。長期secret自体はファイルへ保存しません。
+現在tokenだけを`data/worker/session-token.txt`へ`0600`で原子的に上書きし、起動時とローテーション時にtoken本体ではなく絶対ファイルパスと有効期限だけをstdioへ表示します。サーバー停止時にtoken fileを削除します。
+Worker参加者は`/worker/login#<session-token.txtの内容>`を開きます。fragmentはHTTP URLへ送られず、login bootstrapが同一originの`POST /worker/session`本文としてTLS内でtokenを送信します。正しい場合だけHttpOnly・SameSite=StrictのWorker Cookieを発行します。Cookieのtokenが現在windowまたは30秒grace内の直前windowと一致しない場合、Worker assetsと`/worker/ws` WebSocket Upgradeは拒否されます。すでに確立済みの暗号化Worker WSSは10分境界で強制切断せず、新規参加・再接続だけ最新tokenを要求します。
+Workerは合成対象テキストと生成音声を扱えるため、Worker接続トークンは信頼できる参加者だけへ渡します。任意第三者Worker、reputation、多数決による偽音声検出はこの構成の信頼境界に含めません。
+## Trusted Worker暗号化セッション
+Worker参加時にブラウザとNode.jsはP-256 ECDHの一時鍵ペアを生成し、WSS上で公開鍵と32-byte nonceを交換します。共有秘密からHKDF-SHA-256で方向別AES-256-GCM鍵、方向別4-byte nonce prefix、proof keyを派生し、双方のHMAC-SHA-256 proofが一致した後だけWorkerセッションを有効化します。Worker秘密鍵はブラウザセッション外へ保存しません。
+サーバーからWorkerへCONFIG、SYNTH、CANCELなどのアプリメッセージを送る前には暗号化PINGを送信し、対応するPONGを5秒以内に受信できた場合だけ本メッセージを送ります。アイドル中も15秒ごとにPINGします。モデルのダウンロード・初期化・音声生成はPING/PONG受信ループをブロックしません。
+## Remoteクライアント暗号
+Remoteクライアント向け`/remote`は従来どおりWSS/TLSだけに依存しません。起動ごとに32-byte `authKey`と32-byte `encryptionKey`を生成し、HMAC-SHA-256認証、HKDF-SHA-256鍵派生、方向別AES-256-GCMを使用します。AUTHは接続後20秒以内に完了する必要があります。
+## ペアリング情報
+公開HTTPS originが確定すると、同じoriginの`wss://<host>/remote`を使ってQR payloadと`data/pairing/typed-voice-server.tvrkey`を生成します。QR payloadは`{"v":1,"u":"wss://.../remote","a":"<authKey>","e":"<encryptionKey>","c":"<checksum>"}`です。`.tvrkey`の実パスは起動ログへ表示し、サーバー停止時に削除します。
+認証済み管理ページをHTTPSで開くと、管理ページ自身の`location.origin`をNode.jsへ通知します。そのためCodespaces公開URLと`trycloudflare.com`のどちらでも、実際に開いた経路をそのままペアリング先として使用できます。`--public-origin https://...`で明示指定もできます。
+## 管理ページのプライバシー保護
+起動ごとに`SHA-256(random 32 bytes)`形式の64桁小文字hex管理セッショントークンを生成し、`data/admin/session-token.txt`へ`0600`で保存します。起動ログにはトークン本体ではなく絶対ファイルパスだけを表示します。
+最初に`/admin/login#<session-token.txtの内容>`へアクセスします。tokenはURL fragmentなのでHTTPリクエストやproxy access URLへ送られず、login bootstrapが同一originの`POST /admin/session`本文としてTLS内で送信します。正しい場合だけHttpOnly・SameSite=Strictの管理Cookieを発行して`/admin/`へ遷移します。管理HTML/CSS/JSと`/admin/ws`のWebSocket Upgradeは同じCookie検証を通らない限り404または接続拒否になり、トークン未所持者は管理WebSocketへ到達できません。トークンはそのサーバープロセスの終了まで有効で、再起動時にローテーションします。
+## モデルとWorker
+管理画面で`fp32`、`fp16`、`mobile-int8`、`mobile-int4`を選択できます。選択は`data/settings.json`へ保存します。変更時は参加中Workerへ新しいCONFIGを送り、各Workerが自分のブラウザ内でモデルを再準備します。合成文章は実際に処理を担当するTrusted Workerへ送信されるため、Worker tokenを渡した参加者は入力内容を扱える信頼主体として扱います。
 ## 実行
-Release artifactにはnpm依存を含めません。Node.js 22以上、Google Chrome、Codex、cloudflaredをPC側に用意して、展開ディレクトリで直接実行します。
+Release artifactはビルド済みWorker browser assetsを`engine/`へ含みます。実行にはNode.js 22以上が必要です。
 ```text
-node server-main.mjs --multi 3
+node server-main.mjs --host 0.0.0.0 --port 3000
 ```
-主なオプションは`--multi 1..8`、`--profile fp32|fp16|mobile-int8|mobile-int4`、`--chrome <path>`、`--codex <path>`、`--cloudflared <path>`、`--no-open-ui`です。
-## GitHub Actions
-`.github/workflows/build.yml`は親Nodeコアテストを実行し、`typed-voice` submoduleだけを初期化してCI上で`npm ci`、typed-voiceテスト、Vite buildを実行します。GitHub PagesやCodespacesは配布経路に使いません。ビルド済みbrowser assetsと既存のライセンス表示一式をRelease ZIPの`engine/`へ同梱し、実行PCではnpm/Pythonを使いません。Releaseは`typed-voice-server-latest`を更新します。`local-mcp-chatgpt-tunnel` submoduleはCIで初期化しません。
+Quick Tunnelを使う場合は別プロセスで次を実行します。
+```text
+cloudflared tunnel --url http://localhost:3000
+```
+## Codespaces開発環境
+`.devcontainer`はNode.js 22、Rust/Kanalizer、Codex CLI 0.147.0、Codex elevated sandbox helper、cloudflared 2026.8.2、Worker browser buildを準備します。CodexのLinux sandbox helperがmount namespaceを構成できるようCodespace containerは`privileged`で作成します。Codex CLIはdevcontainer作成時に通常ユーザーのnpmへ導入し、`node`と`codex`を`sudo`のsecure PATHから到達できるようにした後、`sudo codex sandbox setup --elevated --current-user`を実行します。Codespaces forwardingはdevcontainerの`forwardPorts: [3000]`へ固定し、Node.jsサーバーの既定listen先も`0.0.0.0:3000`です。サーバー自身をCodex内部から再帰起動する設計ではなく、必要な実働テスト時にサーバープロセス全体をCodex sandboxで起動します。`.devcontainer`変更後は既存Codespaceのcontainer rebuildが必要です。
 ## 実働検証
-Codexへ渡すWindows実機の検証項目は`docs/codex-validation.md`にあります。public/admin sandbox、暗号AUTH、multiタブ、TEXT→AUDIO、UUID履歴API、Quick Tunnelまでを実働で確認する前提です。
+Codespaces、temporary public deployment、Quick Tunnel、管理セッショントークン、10分Worker接続トークン、Trusted Worker、Remote TEXT→AUDIOの検証手順は`docs/codespace-validation.md`にあります。

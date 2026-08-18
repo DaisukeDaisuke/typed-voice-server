@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>typed-voice Trusted Worker</title>
+</head>
+<body>
+  <div id="service-worker-required" class="service-worker-required" role="alertdialog" aria-modal="true" aria-labelledby="service-worker-required-title" hidden>
+    <div class="service-worker-required-card">
+      <h1 id="service-worker-required-title">サービスワーカが必要です</h1>
+      <p>音声モデルのキャッシュとCross-Origin IsolationにService Workerを使用します。</p>
+      <button type="button" onclick="location.reload()">再試行</button>
+    </div>
+  </div>
+  <main class="volunteer-worker-shell">
+    <h1>typed-voice Trusted Worker</h1>
+    <p>現在の10分Worker接続トークンで認証されたブラウザだけが、このWebGPUを音声合成Workerとして提供できます。参加を開始するまで、モデル読み込み・音声合成は行いません。</p>
+    <p>参加中は、合成対象の文章がこのブラウザへ暗号化通信で送られ、ローカルで音声へ変換されます。Workerは入力文章と生成結果を扱えるため、信頼できる参加者だけに接続トークンを渡してください。</p>
+    <button id="volunteer-start" type="button">このブラウザで参加する</button>
+    <button id="volunteer-stop" type="button" hidden>参加を終了する</button>
+    <p id="server-engine-status" role="status">参加していません。</p>
+    <dl>
+      <div><dt>接続</dt><dd id="volunteer-connection">未接続</dd></div>
+      <div><dt>モデル</dt><dd id="volunteer-model">未選択</dd></div>
+      <div><dt>バックエンド</dt><dd id="volunteer-backend">未初期化</dd></div>
+    </dl>
+  </main>
+  <script type="module" src="./src/server-engine.js"></script>
+</body>
+</html>

@@ -95,22 +95,6 @@ async function openWebSocket(url, timeoutMs = 10_000) {
   return socket;
 }
 
-export async function probeAdminWebSocket({ adminUrl, token, timeoutMs = 10_000 }) {
-  const url = new URL("admin", adminUrl);
-  url.protocol = "ws:";
-  const socket = await openWebSocket(url.href, timeoutMs);
-  const next = createMessageQueue(socket);
-  try {
-    socket.send(Buffer.from(JSON.stringify({ type: "auth", token }), "utf8"));
-    const payload = await next(timeoutMs);
-    const message = JSON.parse(payload.toString("utf8"));
-    if (message?.type !== "snapshot" || !message.state) throw new Error("admin websocket did not return a snapshot");
-    return message.state;
-  } finally {
-    try { socket.close(); } catch {}
-  }
-}
-
 export async function probeRemoteEndpoint({
   endpoint,
   authKey,

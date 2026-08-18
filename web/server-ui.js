@@ -1,4 +1,3 @@
-const ADMIN_TOKEN_KEY = "typed-voice-server-admin-token-v1";
 const QR_MODULE_URL = "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
 
 const overallStatus = document.getElementById("server-overall-status");
@@ -23,18 +22,10 @@ const workerTemplate = document.getElementById("server-worker-template");
 const modelForm = document.getElementById("server-model-form");
 const modelProfileSelect = document.getElementById("server-model-profile");
 const modelStatus = document.getElementById("server-model-status");
-const debugForm = document.getElementById("server-debug-form");
-const debugSlotInput = document.getElementById("server-debug-slot");
-const debugExpression = document.getElementById("server-debug-expression");
-const debugResult = document.getElementById("server-debug-result");
 const stateFields = {
   tunnel: document.getElementById("state-tunnel"),
-  chrome: document.getElementById("state-chrome"),
-  webmcp: document.getElementById("state-webmcp"),
+  engine: document.getElementById("state-engine"),
   model: document.getElementById("state-model"),
-  control: document.getElementById("state-control"),
-  adminWorker: document.getElementById("state-admin-worker"),
-  publicWorker: document.getElementById("state-public-worker"),
   client: document.getElementById("state-client"),
   work: document.getElementById("state-work"),
 };
@@ -45,22 +36,7 @@ let qrModulePromise = null;
 let selectedConversationId = null;
 let selectedHistoryMetadata = null;
 let selectedHistoryEvents = [];
-const debugRequests = new Set();
 const modelRequests = new Set();
-
-function readAdminToken() {
-  const fragment = location.hash.slice(1);
-  if (fragment) {
-    if (/^[A-Za-z0-9_-]{40,100}$/.test(fragment)) {
-      sessionStorage.setItem(ADMIN_TOKEN_KEY, fragment);
-      history.replaceState(null, "", `${location.pathname}${location.search}`);
-      return fragment;
-    }
-    history.replaceState(null, "", `${location.pathname}${location.search}`);
-  }
-  const stored = sessionStorage.getItem(ADMIN_TOKEN_KEY) || "";
-  return /^[A-Za-z0-9_-]{40,100}$/.test(stored) ? stored : null;
-}
 
 function send(message) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return false;
@@ -72,12 +48,8 @@ function renderState(state) {
   overallStatus.textContent = state.overall || "準備中";
   overallStatus.dataset.state = state.pairingReady ? "ready" : state.overall === "起動失敗" ? "error" : "waiting";
   stateFields.tunnel.textContent = state.tunnel || "待機中";
-  stateFields.chrome.textContent = state.chrome || "待機中";
-  stateFields.webmcp.textContent = state.webmcp || "待機中";
+  stateFields.engine.textContent = state.engine || "待機中";
   stateFields.model.textContent = state.model || "待機中";
-  stateFields.control.textContent = state.control || "待機中";
-  stateFields.adminWorker.textContent = state.adminWorker || "待機中";
-  stateFields.publicWorker.textContent = state.publicWorker || "待機中";
   stateFields.client.textContent = String(state.clients ?? 0);
   stateFields.work.textContent = `${state.runningJobs ?? 0} / ${state.queuedJobs ?? 0}`;
   pairingEndpoint.textContent = state.pairingEndpoint || "未準備";
@@ -96,11 +68,11 @@ function renderWorkers(slots) {
     const row = workerTemplate.content.firstElementChild.cloneNode(true);
     row.querySelector(".server-worker-name").textContent = `slot ${slot.index}`;
     row.querySelector(".server-worker-state").textContent = slot.connected
-      ? slot.busy ? "合成中" : slot.info ? "待機" : "接続中"
+      ? slot.busy ? "合成中" : slot.info?.ready ? "待機" : slot.authenticated ? "モデル準備中" : "鍵交換中"
       : "切断";
     row.querySelector(".server-worker-backend").textContent = slot.info
-      ? `${slot.info.backend || "unknown"} / ${slot.info.profile || "profile?"}`
-      : "WebMCP未準備";
+      ? `${slot.info.backend || "unknown"} / ${slot.info.profile || "profile?"}${slot.lastPongAt ? ` / PONG ${new Date(slot.lastPongAt).toLocaleTimeString("ja-JP")}` : ""}`
+      : "暗号化Workerセッション準備中";
     workerList.append(row);
   }
 }
@@ -170,15 +142,6 @@ function acceptHistoryEvent(message) {
   renderHistory();
 }
 
-function acceptDebugResponse(message) {
-  if (!debugRequests.has(message.requestId)) return;
-  debugRequests.delete(message.requestId);
-  if (!message.ok) {
-    debugResult.textContent = `ERROR\n${message.error || "debug evaluation failed"}`;
-    return;
-  }
-  debugResult.textContent = JSON.stringify(message.result, null, 2);
-}
 
 function acceptModelResponse(message) {
   if (!modelRequests.has(message.requestId)) return;
@@ -261,15 +224,13 @@ function decodeMessage(data) {
 }
 
 function connect() {
-  const token = readAdminToken();
-  if (!token) {
-    overallStatus.textContent = "server-main.mjsから開き直してください";
-    overallStatus.dataset.state = "error";
-    return;
-  }
-  socket = new WebSocket(`ws://${location.host}/admin`);
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  socket = new WebSocket(`${protocol}//${location.host}/admin/ws`);
   socket.binaryType = "arraybuffer";
-  socket.addEventListener("open", () => send({ type: "auth", token }));
+  socket.addEventListener("open", () => {
+    if (location.protocol === "https:") send({ type: "public-origin", origin: location.origin });
+    send({ type: "refresh" });
+  });
   socket.addEventListener("message", (event) => {
     try {
       const message = decodeMessage(event.data);
@@ -284,8 +245,6 @@ function connect() {
         acceptHistoryResponse(message);
       } else if (message.type === "history-event") {
         acceptHistoryEvent(message);
-      } else if (message.type === "debug-response") {
-        acceptDebugResponse(message);
       } else if (message.type === "model-response") {
         acceptModelResponse(message);
       }
@@ -308,19 +267,6 @@ function showError(error) {
 historyForm.addEventListener("submit", (event) => {
   event.preventDefault();
   void openHistory(historyUuidInput.value);
-});
-debugForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  const slot = Number(debugSlotInput.value);
-  const expression = debugExpression.value;
-  if (!Number.isSafeInteger(slot) || slot < 0 || !expression.trim()) {
-    debugResult.textContent = "slotとJavaScriptを指定してください。";
-    return;
-  }
-  const requestId = crypto.randomUUID().replace(/-/g, "");
-  debugRequests.add(requestId);
-  debugResult.textContent = "実行中…";
-  send({ type: "debug-eval", requestId, slot, expression });
 });
 modelForm.addEventListener("submit", (event) => {
   event.preventDefault();
