@@ -1,6 +1,9 @@
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const parsed = parseArgs({
   args: process.argv.slice(2),
@@ -14,7 +17,7 @@ const parsed = parseArgs({
 
 const port = Number(parsed.values.port);
 if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error("--port must be 1..65535");
-const tokenFile = resolve(String(parsed.values["token-file"]));
+const tokenFile = resolve(projectRoot, String(parsed.values["token-file"]));
 const token = await readFile(tokenFile, "utf8");
 if (!/^[0-9a-f]{128}$/.test(token)) throw new Error("worker reset token file must contain exactly 128 lowercase hex characters");
 
