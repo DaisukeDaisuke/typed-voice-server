@@ -8,10 +8,9 @@ CLOUDFLARED_VERSION="2026.8.2"
 
 printf '\n[typed-voice-server] Installing Codex CLI...\n'
 npm install -g "@openai/codex@${CODEX_VERSION}"
-sudo ln -sf "$(command -v node)" /usr/local/bin/node
-sudo ln -sf "$(command -v codex)" /usr/local/bin/codex
-printf '\n[typed-voice-server] Preparing Codex elevated sandbox helper for the Codespace user...\n'
-sudo codex sandbox setup --elevated --current-user
+
+printf '\n[typed-voice-server] Verifying Codex Linux sandbox...\n'
+codex sandbox linux --full-auto /usr/bin/true
 
 printf '\n[typed-voice-server] Installing cloudflared...\n'
 case "$(uname -m)" in

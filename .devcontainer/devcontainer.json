@@ -13,6 +13,9 @@
       "profile": "minimal",
       "targets": "wasm32-unknown-unknown",
       "components": "rustfmt,clippy"
+    },
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
     }
   },
   "forwardPorts": [3000],
