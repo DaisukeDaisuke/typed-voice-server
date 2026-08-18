@@ -186,10 +186,11 @@ diff --git a/vite.config.js b/vite.config.js
 index 3333333..4444444 100644
 --- a/vite.config.js
 +++ b/vite.config.js
-@@ -24,6 +24,7 @@ export default defineConfig({
+@@ -26,6 +26,7 @@ export default defineConfig({
      rollupOptions: {
        input: {
          app: resolve(rootDirectory, "index.html"),
 +        serverEngine: resolve(rootDirectory, "server-engine.html"),
-         pairing: resolve(rootDirectory, "pairing.html"),
          poc: resolve(rootDirectory, "poc.html"),
+         licenses: resolve(rootDirectory, "licenses.html"),
+       },
