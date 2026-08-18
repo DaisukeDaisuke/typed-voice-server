@@ -89,7 +89,8 @@ function requestOrigin(request) {
   const forwardedHost = String(request.headers["x-forwarded-host"] ?? "").split(",")[0].trim();
   const host = forwardedHost || String(request.headers.host ?? "").trim();
   if (!host) return null;
-  return `${isHttps(request) ? "https" : "http"}
+  return `${isHttps(request) ? "https" : "http"}://${host}`;
+}
 
 function isDirectLoopbackRequest(request) {
   if (request.headers.forwarded
@@ -100,7 +101,6 @@ function isDirectLoopbackRequest(request) {
   return address === "127.0.0.1"
     || address === "::1"
     || address === "::ffff:127.0.0.1";
-}://${host}`;
 }
 
 async function readBoundedTextBody(request, maxBytes = 128) {
