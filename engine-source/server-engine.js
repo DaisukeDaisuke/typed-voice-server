@@ -266,9 +266,15 @@ async function startParticipation() {
       socket?.close(1008);
     });
   });
-  socket.addEventListener("close", () => {
+  socket.addEventListener("close", (event) => {
     connectionElement.textContent = "切断";
     updateParticipationUi(false);
+    if (event.code === 1008) {
+      startButton.disabled = true;
+      setStatus("Worker接続認証が失効しました。現在のWorker接続URLから認証し直してください。");
+    } else {
+      setStatus("Worker接続が切断されました。再参加できます。");
+    }
     socket = null;
     session = null;
     handshake = null;
