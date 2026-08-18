@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Initialize typed-voice submodule only
-        run: git submodule update --init --depth 1 typed-voice
+        run: git submodule update --init --recursive --depth 1 typed-voice
       - name: Add server-only browser entry
         run: |
           if [ ! -f typed-voice/server-engine.html ] || [ ! -f typed-voice/src/server-engine.js ]; then
@@ -27,10 +27,39 @@ jobs:
           cache-dependency-path: typed-voice/package-lock.json
       - name: Test Node server core
         run: node --test test/*.test.mjs
-      - name: Build typed-voice browser assets
+      - name: Install typed-voice dependencies
+        working-directory: typed-voice
+        run: npm ci
+      - name: Set up Kanalizer Rust toolchain
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal
+          rustup target add wasm32-unknown-unknown --toolchain 1.85.0
+          mkdir -p "$RUNNER_TEMP/wasm-pack-bin"
+          curl -L --fail --retry 3 \
+            "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-x86_64-unknown-linux-musl.tar.gz" \
+            -o "$RUNNER_TEMP/wasm-pack.tar.gz"
+          tar -xzf "$RUNNER_TEMP/wasm-pack.tar.gz" -C "$RUNNER_TEMP"
+          install \
+            "$RUNNER_TEMP/wasm-pack-v0.15.0-x86_64-unknown-linux-musl/wasm-pack" \
+            "$RUNNER_TEMP/wasm-pack-bin/wasm-pack"
+          echo "$RUNNER_TEMP/wasm-pack-bin" >> "$GITHUB_PATH"
+      - name: Build patched Kanalizer browser WASM on CPU
+        working-directory: typed-voice
+        run: npm run build:kanalizer-wasm
+      - name: Build Kanalizer v3 dictionary on CPU
+        working-directory: typed-voice
+        env:
+          KANALIZER_DATASET_REVISION: 21fc9ccf25d3b18030d3e0db3bf5994229fae697
+        run: |
+          curl -L --fail --retry 3 \
+            "https://huggingface.co/datasets/VOICEVOX/kanalizer-dataset/resolve/${KANALIZER_DATASET_REVISION}/dataset/dataset.jsonl" \
+            -o "$RUNNER_TEMP/kanalizer-dataset-v3.jsonl"
+          node scripts/build-kanalizer-dictionary.mjs \
+            "$RUNNER_TEMP/kanalizer-dataset-v3.jsonl" \
+            src/kanalizer-dictionary
+      - name: Test and build typed-voice browser assets
         working-directory: typed-voice
         run: |
-          npm ci
           npm test
           npm run build
       - name: Assemble local release artifact
