@@ -97,6 +97,7 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     remoteHub: fakeRemoteHub,
     stateProvider: () => ({ overall: "test" }),
     pairingProvider: () => null,
+    publicOriginProvider: () => "https://public.example",
     workerTokenValidator: (token) => token === workerToken,
   });
   try {
@@ -127,6 +128,14 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
       body: sessionToken,
     });
     assert.equal(crossOrigin.statusCode, 404);
+
+    const publicOriginAccepted = await httpRequest(port, {
+      method: "POST",
+      path: "/admin/session",
+      origin: "https://public.example",
+      body: sessionToken,
+    });
+    assert.equal(publicOriginAccepted.statusCode, 204);
 
     const accepted = await httpRequest(port, {
       method: "POST",
@@ -175,6 +184,14 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
       body: workerToken,
     });
     assert.equal(acceptedWorker.statusCode, 204);
+
+    const publicWorker = await httpRequest(port, {
+      method: "POST",
+      path: "/worker/session",
+      origin: "https://public.example",
+      body: workerToken,
+    });
+    assert.equal(publicWorker.statusCode, 204);
     const workerSetCookie = acceptedWorker.headers["set-cookie"]?.[0] ?? "";
     assert.match(workerSetCookie, /^typed_voice_worker_session=/u);
     assert.match(workerSetCookie, /HttpOnly/u);
@@ -191,6 +208,8 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     assert.equal(workerUpgradeCalls, 0);
     await websocketUpgrade(port, workerCookie, `http://127.0.0.1:${port}`, "/worker/ws");
     assert.equal(workerUpgradeCalls, 1);
+    await websocketUpgrade(port, workerCookie, "https://public.example", "/worker/ws");
+    assert.equal(workerUpgradeCalls, 2);
   } finally {
     await server.close();
   }

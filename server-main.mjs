@@ -158,6 +158,7 @@ let workerPool = null;
 let remoteHub = null;
 let httpServer = null;
 let shuttingDown = false;
+let acceptedPublicOrigin = null;
 const historySubscriptions = new Map();
 const authKey = randomBytes(32);
 const encryptionKey = randomBytes(32);
@@ -254,6 +255,7 @@ async function setPublicOrigin(value) {
   url.pathname = "/";
   url.search = "";
   url.hash = "";
+  acceptedPublicOrigin = url.origin;
   const publicUrl = new URL("remote", url);
   publicUrl.protocol = "wss:";
   if (pairingPayload?.u === publicUrl.href) return pairingPayload;
@@ -367,6 +369,9 @@ try {
     },
     onModelSet: setServerModelProfile,
     onPublicOrigin: setPublicOrigin,
+    publicOriginProvider() {
+      return acceptedPublicOrigin;
+    },
     workerTokenValidator(token) {
       return verifyWorkerAccessToken(workerAccessSecret, token);
     },

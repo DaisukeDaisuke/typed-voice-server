@@ -143,6 +143,7 @@ export class OrchestratorHttpServer {
     onHistoryUnsubscribe = () => {},
     onModelSet = async () => {},
     onPublicOrigin = async () => {},
+    publicOriginProvider = () => null,
     workerTokenValidator = () => false,
   }) {
     if (!/^[0-9a-f]{64}$/.test(String(sessionToken ?? ""))) throw new Error("admin session token must be 64 lowercase hex characters");
@@ -162,6 +163,7 @@ export class OrchestratorHttpServer {
     this.onHistoryUnsubscribe = onHistoryUnsubscribe;
     this.onModelSet = onModelSet;
     this.onPublicOrigin = onPublicOrigin;
+    this.publicOriginProvider = publicOriginProvider;
     this.workerTokenValidator = workerTokenValidator;
     this.server = null;
     this.adminClients = new Set();
@@ -184,8 +186,7 @@ export class OrchestratorHttpServer {
       try {
         const url = new URL(request.url, "http://localhost");
         if (url.pathname === "/worker/ws") {
-          const origin = requestOrigin(request);
-          if (!this.#workerAuthorized(request) || !origin || String(request.headers.origin ?? "") !== origin) {
+          if (!this.#workerAuthorized(request) || !this.#originAllowed(request)) {
             socket.destroy();
             return;
           }
@@ -197,8 +198,8 @@ export class OrchestratorHttpServer {
           return;
         }
         if (url.pathname === "/admin/ws") {
-          const origin = requestOrigin(request);
-          if (!this.#adminAuthorized(request) || !origin || String(request.headers.origin ?? "") !== origin) {
+          const origin = String(request.headers.origin ?? "");
+          if (!this.#adminAuthorized(request) || !this.#originAllowed(request)) {
             socket.destroy();
             return;
           }
@@ -259,9 +260,7 @@ export class OrchestratorHttpServer {
       return;
     }
     if (request.method === "POST" && url.pathname === "/admin/session") {
-      const origin = String(request.headers.origin ?? "");
-      const expectedOrigin = requestOrigin(request);
-      if (!origin || !expectedOrigin || origin !== expectedOrigin) {
+      if (!this.#originAllowed(request)) {
         noAccess(response);
         return;
       }
@@ -292,9 +291,7 @@ export class OrchestratorHttpServer {
       return;
     }
     if (request.method === "POST" && url.pathname === "/worker/session") {
-      const origin = String(request.headers.origin ?? "");
-      const expectedOrigin = requestOrigin(request);
-      if (!origin || !expectedOrigin || origin !== expectedOrigin) {
+      if (!this.#originAllowed(request)) {
         noAccess(response);
         return;
       }
@@ -376,6 +373,20 @@ export class OrchestratorHttpServer {
 
   #workerAuthorized(request) {
     return this.workerTokenValidator(cookieValue(request, WORKER_COOKIE));
+  }
+
+  #originAllowed(request) {
+    const supplied = String(request.headers.origin ?? "");
+    if (!supplied) return false;
+    const direct = requestOrigin(request);
+    if (direct && supplied === direct) return true;
+    const configured = this.publicOriginProvider();
+    if (!configured) return false;
+    try {
+      return supplied === new URL(String(configured)).origin;
+    } catch {
+      return false;
+    }
   }
 
   #attachAdmin(ws, origin) {
