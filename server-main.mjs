@@ -22,6 +22,7 @@ const historyDirectory = join(projectRoot, "data", "history");
 const settingsPath = join(projectRoot, "data", "settings.json");
 const adminSessionTokenPath = join(projectRoot, "data", "admin", "session-token.txt");
 const workerSessionTokenPath = join(projectRoot, "data", "worker", "session-token.txt");
+const workerResetTokenPath = join(projectRoot, "data", "worker", "reset-token.txt");
 const pairingFilePath = join(projectRoot, "data", "pairing", "typed-voice-server.tvrkey");
 
 const parsed = parseArgs({
@@ -123,6 +124,16 @@ async function writeSessionToken(path, token) {
   return realpath(path);
 }
 
+async function writeRawSecretToken(path, token) {
+  await mkdir(dirname(path), { recursive: true });
+  const temporary = `${path}.tmp`;
+  await writeFile(temporary, token, { encoding: "utf8", mode: 0o600 });
+  await chmod(temporary, 0o600).catch(() => {});
+  await rename(temporary, path);
+  await chmod(path, 0o600).catch(() => {});
+  return realpath(path);
+}
+
 async function removeSessionToken(path) {
   await rm(path, { force: true }).catch(() => {});
   await rm(`${path}.tmp`, { force: true }).catch(() => {});
@@ -151,7 +162,9 @@ let pairingPayload = null;
 let pairingFileResolvedPath = null;
 let adminSessionTokenResolvedPath = null;
 let workerSessionTokenResolvedPath = null;
+let workerResetTokenResolvedPath = null;
 let workerTokenTimer = null;
+let workerResetPromise = null;
 let settingsStore = null;
 let historyStore = null;
 let workerPool = null;
@@ -163,7 +176,8 @@ const historySubscriptions = new Map();
 const authKey = randomBytes(32);
 const encryptionKey = randomBytes(32);
 const adminSessionToken = createAdminSessionToken();
-const workerAccessSecret = randomBytes(64);
+const workerResetToken = randomBytes(64).toString("hex");
+let workerAccessSecret = randomBytes(64);
 
 function adminSnapshot() {
   const poolStatus = workerPool?.status();
@@ -205,6 +219,30 @@ async function refreshWorkerSessionToken() {
   printWorkerLoginUrl(current.token);
   if (shuttingDown) return;
   scheduleWorkerTokenRefresh(millisecondsUntilWorkerTokenRotation() + 25);
+}
+
+async function resetWorkerAccess() {
+  if (workerResetPromise) return workerResetPromise;
+  workerResetPromise = (async () => {
+    const nextSecret = randomBytes(64);
+    const current = currentWorkerAccessToken(nextSecret);
+    const resolvedPath = await writeSessionToken(workerSessionTokenPath, current.token);
+    workerAccessSecret = nextSecret;
+    workerSessionTokenResolvedPath = resolvedPath;
+    clearTimeout(workerTokenTimer);
+    workerTokenTimer = null;
+    workerPool?.disconnectAll(1008);
+    consoleLine(ANSI.yellow, "[worker access reset]", new Date().toISOString());
+    consoleLine(ANSI.yellow, "[worker session token file]", workerSessionTokenResolvedPath);
+    consoleLine(ANSI.dim, "[worker token expires]", new Date(current.expiresAt).toISOString());
+    printWorkerLoginUrl(current.token);
+    if (!shuttingDown) scheduleWorkerTokenRefresh(millisecondsUntilWorkerTokenRotation() + 25);
+  })();
+  try {
+    await workerResetPromise;
+  } finally {
+    workerResetPromise = null;
+  }
 }
 
 async function persistHistoryEvent(entry) {
@@ -298,6 +336,8 @@ async function shutdown(exitCode = 0) {
   workerTokenTimer = null;
   await removeSessionToken(workerSessionTokenPath);
   workerSessionTokenResolvedPath = null;
+  await removeSessionToken(workerResetTokenPath);
+  workerResetTokenResolvedPath = null;
   process.exitCode = exitCode;
 }
 
@@ -308,11 +348,13 @@ try {
   await removeEncryptedPairingFile(pairingFilePath);
   await removeSessionToken(adminSessionTokenPath);
   await removeSessionToken(workerSessionTokenPath);
+  await removeSessionToken(workerResetTokenPath);
   settingsStore = await new ServerSettingsStore(settingsPath).open();
   state.modelProfile = requestedProfile ?? settingsStore.modelProfile;
   if (requestedProfile) await settingsStore.setModelProfile(requestedProfile);
   historyStore = await new HistoryStore(historyDirectory).open();
   adminSessionTokenResolvedPath = await writeSessionToken(adminSessionTokenPath, adminSessionToken);
+  workerResetTokenResolvedPath = await writeRawSecretToken(workerResetTokenPath, workerResetToken);
   await refreshWorkerSessionToken();
 
   workerPool = new BrowserWorkerPool({
@@ -372,6 +414,8 @@ try {
     publicOriginProvider() {
       return acceptedPublicOrigin;
     },
+    workerResetToken,
+    onWorkerReset: resetWorkerAccess,
     workerTokenValidator(token) {
       return verifyWorkerAccessToken(workerAccessSecret, token);
     },
@@ -383,6 +427,8 @@ try {
   consoleLine(ANSI.cyan, "[worker]", `/worker/`);
   consoleLine(ANSI.magenta, "[remote]", `/remote`);
   consoleLine(ANSI.yellow, "[admin session token file]", adminSessionTokenResolvedPath);
+  consoleLine(ANSI.yellow, "[worker reset token file]", workerResetTokenResolvedPath);
+  consoleLine(ANSI.dim, "[worker reset endpoint]", `POST http://127.0.0.1:${address.port}/worker/reset`);
   printAdminLoginUrl();
 
   if (parsed.values["public-origin"]) await setPublicOrigin(parsed.values["public-origin"]);

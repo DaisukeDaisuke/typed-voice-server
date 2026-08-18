@@ -274,6 +274,16 @@ export class BrowserWorkerPool {
     this.#notify();
   }
 
+  disconnectAll(code = 1008) {
+    for (const worker of this.workers.values()) {
+      worker.authenticated = false;
+      worker.info = null;
+      worker.session = null;
+      worker.ws.close(code);
+    }
+    this.#notify();
+  }
+
   #attach(ws) {
     const worker = {
       index: this.nextWorkerIndex++,

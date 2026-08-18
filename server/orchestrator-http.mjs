@@ -144,6 +144,8 @@ export class OrchestratorHttpServer {
     onModelSet = async () => {},
     onPublicOrigin = async () => {},
     publicOriginProvider = () => null,
+    workerResetToken = null,
+    onWorkerReset = async () => {},
     workerTokenValidator = () => false,
   }) {
     if (!/^[0-9a-f]{64}$/.test(String(sessionToken ?? ""))) throw new Error("admin session token must be 64 lowercase hex characters");
@@ -164,6 +166,11 @@ export class OrchestratorHttpServer {
     this.onModelSet = onModelSet;
     this.onPublicOrigin = onPublicOrigin;
     this.publicOriginProvider = publicOriginProvider;
+    this.workerResetToken = String(workerResetToken ?? "");
+    if (this.workerResetToken && !/^[0-9a-f]{128}$/.test(this.workerResetToken)) {
+      throw new Error("worker reset token must be 128 lowercase hex characters");
+    }
+    this.onWorkerReset = onWorkerReset;
     this.workerTokenValidator = workerTokenValidator;
     this.server = null;
     this.adminClients = new Set();
@@ -302,6 +309,21 @@ export class OrchestratorHttpServer {
       }
       response.writeHead(204, {
         "Set-Cookie": workerCookie(supplied, request),
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+      });
+      response.end();
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/worker/reset") {
+      const supplied = await readBoundedTextBody(request, 128).catch(() => "");
+      if (!this.workerResetToken || !safeEqual(supplied, this.workerResetToken)) {
+        noAccess(response);
+        return;
+      }
+      await this.onWorkerReset();
+      response.writeHead(204, {
         "Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",

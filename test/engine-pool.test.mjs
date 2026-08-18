@@ -278,3 +278,23 @@ test("Trusted Workerは各サーバーメッセージ前にPINGされ、脱落�
     await new Promise((resolvePromise) => server.close(resolvePromise));
   }
 });
+
+test("緊急失効では接続済みTrusted Workerを全て切断する", async () => {
+  const pool = new BrowserWorkerPool({ profile: "fp16", jobTimeoutMs: 5000 });
+  const server = await startPoolServer(pool);
+  const port = server.address().port;
+  const worker = new VolunteerClient(`ws://127.0.0.1:${port}/worker/ws`);
+  try {
+    await worker.startReady();
+    assert.equal(pool.status().engines.length, 1);
+    const closed = new Promise((resolvePromise) => worker.socket.addEventListener("close", resolvePromise, { once: true }));
+    pool.disconnectAll(1008);
+    await closed;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+    assert.equal(pool.status().engines.length, 0);
+  } finally {
+    worker.close();
+    await pool.close();
+    await new Promise((resolvePromise) => server.close(resolvePromise));
+  }
+});

@@ -10,6 +10,7 @@ import { OrchestratorHttpServer } from "../server/orchestrator-http.mjs";
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sessionToken = "a".repeat(64);
 const workerToken = "c".repeat(128);
+const workerResetToken = "e".repeat(128);
 
 function httpRequest(port, { method = "GET", path, cookie = null, origin = null, body = null }) {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -77,6 +78,7 @@ function websocketUpgrade(port, cookie = null, origin = null, path = "/admin/ws"
 
 test("管理画面と管理WebSocketはセッショントークン由来Cookieなしでは到達できない", async () => {
   let workerUpgradeCalls = 0;
+  let workerResetCalls = 0;
   const fakePool = {
     status() { return { engines: [], running: 0, queued: 0, profile: "fp16" }; },
     handleUpgrade(_request, socket) {
@@ -98,6 +100,8 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     stateProvider: () => ({ overall: "test" }),
     pairingProvider: () => null,
     publicOriginProvider: () => "https://public.example",
+    workerResetToken,
+    onWorkerReset: async () => { workerResetCalls += 1; },
     workerTokenValidator: (token) => token === workerToken,
   });
   try {
@@ -192,6 +196,22 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
       body: workerToken,
     });
     assert.equal(publicWorker.statusCode, 204);
+
+    const rejectedReset = await httpRequest(port, {
+      method: "POST",
+      path: "/worker/reset",
+      body: "f".repeat(128),
+    });
+    assert.equal(rejectedReset.statusCode, 404);
+    assert.equal(workerResetCalls, 0);
+
+    const acceptedReset = await httpRequest(port, {
+      method: "POST",
+      path: "/worker/reset",
+      body: workerResetToken,
+    });
+    assert.equal(acceptedReset.statusCode, 204);
+    assert.equal(workerResetCalls, 1);
     const workerSetCookie = acceptedWorker.headers["set-cookie"]?.[0] ?? "";
     assert.match(workerSetCookie, /^typed_voice_worker_session=/u);
     assert.match(workerSetCookie, /HttpOnly/u);
