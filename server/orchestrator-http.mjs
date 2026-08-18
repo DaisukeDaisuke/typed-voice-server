@@ -89,7 +89,18 @@ function requestOrigin(request) {
   const forwardedHost = String(request.headers["x-forwarded-host"] ?? "").split(",")[0].trim();
   const host = forwardedHost || String(request.headers.host ?? "").trim();
   if (!host) return null;
-  return `${isHttps(request) ? "https" : "http"}://${host}`;
+  return `${isHttps(request) ? "https" : "http"}
+
+function isDirectLoopbackRequest(request) {
+  if (request.headers.forwarded
+    || request.headers["x-forwarded-for"]
+    || request.headers["x-forwarded-host"]
+    || request.headers["x-forwarded-proto"]) return false;
+  const address = String(request.socket?.remoteAddress ?? "").toLowerCase();
+  return address === "127.0.0.1"
+    || address === "::1"
+    || address === "::ffff:127.0.0.1";
+}://${host}`;
 }
 
 async function readBoundedTextBody(request, maxBytes = 128) {
@@ -321,6 +332,10 @@ export class OrchestratorHttpServer {
       return;
     }
     if (request.method === "POST" && url.pathname === "/worker/reset") {
+      if (!isDirectLoopbackRequest(request)) {
+        noAccess(response);
+        return;
+      }
       const supplied = await readBoundedTextBody(request, 128).catch(() => "");
       if (!this.workerResetToken || !safeEqual(supplied, this.workerResetToken)) {
         noAccess(response);
