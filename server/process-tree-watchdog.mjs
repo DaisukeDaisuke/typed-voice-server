@@ -21,6 +21,54 @@ function taskkillPath(env = process.env) {
   return join(systemRoot, "System32", "taskkill.exe");
 }
 
+function powershellPath(env = process.env) {
+  const systemRoot = env.SystemRoot || env.SYSTEMROOT || "C:\\Windows";
+  return join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+}
+
+async function readProcessTable() {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const command = "Get-CimInstance Win32_Process | ForEach-Object { '{0},{1}' -f $_.ProcessId,$_.ParentProcessId }";
+    const child = spawn(powershellPath(), ["-NoProfile", "-NonInteractive", "-Command", command], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      shell: false,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+    child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+    child.once("error", rejectPromise);
+    child.once("exit", (code) => {
+      if (code !== 0) {
+        rejectPromise(new Error(`process table snapshot failed (${code}): ${stderr.trim() || "unknown error"}`));
+        return;
+      }
+      const entries = [];
+      for (const line of stdout.split(/\r?\n/u)) {
+        const match = /^(\d+),(\d+)$/.exec(line.trim());
+        if (!match) continue;
+        entries.push({ pid: Number(match[1]), parentPid: Number(match[2]) });
+      }
+      resolvePromise(entries);
+    });
+  });
+}
+
+function collectDescendants(knownPids, entries) {
+  let changed;
+  do {
+    changed = false;
+    for (const entry of entries) {
+      if (!knownPids.has(entry.parentPid) || knownPids.has(entry.pid)) continue;
+      knownPids.add(entry.pid);
+      changed = true;
+    }
+  } while (changed);
+}
+
 async function terminateProcessTree(pid) {
   await new Promise((resolvePromise) => {
     const child = spawn(taskkillPath(), ["/PID", String(pid), "/T", "/F"], {
@@ -37,17 +85,39 @@ async function runWatchdog() {
   if (process.platform !== "win32") throw new Error("process tree watchdog requires Windows");
   const parentPid = watchdogParentPid();
   const roots = new Set();
+  const knownPids = new Set();
   let buffer = "";
   let cleaning = false;
   let parentTimer = null;
+  let snapshotRunning = false;
+  let nextSnapshotAt = 0;
+  let hotSnapshotsUntil = 0;
+
+  const snapshot = async () => {
+    if (snapshotRunning || roots.size === 0) return;
+    snapshotRunning = true;
+    try {
+      collectDescendants(knownPids, await readProcessTable());
+    } catch (error) {
+      process.stderr.write(`[watchdog] ${error instanceof Error ? error.message : String(error)}\n`);
+    } finally {
+      snapshotRunning = false;
+    }
+  };
 
   const acceptLine = (line) => {
     const match = /^([+-])(\d+)$/.exec(line.trim());
     if (!match) return;
     const pid = Number(match[2]);
     if (!validPid(pid)) return;
-    if (match[1] === "+") roots.add(pid);
-    else roots.delete(pid);
+    if (match[1] === "+") {
+      roots.add(pid);
+      knownPids.add(pid);
+      hotSnapshotsUntil = Date.now() + 15_000;
+      nextSnapshotAt = 0;
+    } else {
+      roots.delete(pid);
+    }
   };
 
   const cleanup = async () => {
@@ -55,7 +125,13 @@ async function runWatchdog() {
     cleaning = true;
     if (parentTimer) clearInterval(parentTimer);
     process.stdin.pause();
-    for (const pid of [...roots].reverse()) await terminateProcessTree(pid);
+    while (snapshotRunning) await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+    try {
+      collectDescendants(knownPids, await readProcessTable());
+    } catch (error) {
+      process.stderr.write(`[watchdog] final process table snapshot failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+    for (const pid of [...knownPids].reverse()) await terminateProcessTree(pid);
     process.exit(0);
   };
 
@@ -77,8 +153,14 @@ async function runWatchdog() {
       process.kill(parentPid, 0);
     } catch {
       void cleanup();
+      return;
     }
-  }, 250);
+    const now = Date.now();
+    if (!snapshotRunning && roots.size > 0 && now >= nextSnapshotAt) {
+      nextSnapshotAt = now + (now < hotSnapshotsUntil ? 500 : 30_000);
+      void snapshot();
+    }
+  }, 100);
 }
 
 export class ProcessTreeWatchdog {
@@ -96,7 +178,7 @@ export class ProcessTreeWatchdog {
     if (process.platform !== "win32") throw new Error("process tree watchdog requires Windows");
     const child = spawn(this.nodePath, [this.scriptPath, "--watchdog", `--parent=${process.pid}`], {
       detached: true,
-      stdio: ["pipe", "ignore", "ignore"],
+      stdio: ["pipe", "ignore", "pipe"],
       windowsHide: true,
       shell: false,
     });
@@ -108,6 +190,8 @@ export class ProcessTreeWatchdog {
     child.once("exit", () => {
       this.started = false;
     });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => process.stderr.write(String(chunk)));
     child.unref();
     this.started = true;
   }

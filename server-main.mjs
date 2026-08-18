@@ -9,12 +9,14 @@ import { SandboxedMcpClient } from "./server/sandbox-mcp-client.mjs";
 import { CodexSandboxProcess } from "./server/codex-sandbox-launcher.mjs";
 import { AdminSandboxClient } from "./server/admin-sandbox-client.mjs";
 import { HistoryStore } from "./server/history-store.mjs";
-import { probeAdminWebSocket, probeRemoteEndpoint } from "./server/connectivity-probe.mjs";
+import { probeAdminWebSocket } from "./server/connectivity-probe.mjs";
 import { writeEncryptedPairingFile, removeEncryptedPairingFile } from "./server/pairing-file.mjs";
 import { ServerSettingsStore } from "./server/settings-store.mjs";
 import { ProcessTreeWatchdog } from "./server/process-tree-watchdog.mjs";
 
 const projectRoot = dirname(fileURLToPath(import.meta.url));
+const serverDirectory = join(projectRoot, "server");
+const connectivityProbeEntry = join(serverDirectory, "connectivity-probe-worker.mjs");
 const workerDirectory = join(projectRoot, "worker");
 const workerEntry = join(workerDirectory, "websocket-worker.mjs");
 const adminDirectory = join(projectRoot, "admin");
@@ -380,6 +382,36 @@ async function startTunnel({ codexPath, cloudflaredPath, publicPort }) {
   } finally { clearTimeout(timeout); }
 }
 
+async function probeRemoteInOnlineSandbox({ codexPath, endpoint, authKey, encryptionKey, expectedModelProfile }) {
+  const client = new SandboxedMcpClient({
+    name: "typed-voice-connectivity-probe",
+    command: process.execPath,
+    args: [connectivityProbeEntry],
+    cwd: serverDirectory,
+    sandbox: "onlineworkspace",
+    codexExecutable: codexPath,
+    allowedDirectories: [],
+    allowedFiles: [],
+    sandboxReadOnlyDirectories: [serverDirectory, workerDirectory],
+    isBundled: false,
+    processTracker: processWatchdog,
+  }, {
+    onStderr: (chunk) => process.stderr.write(`[connectivity-probe] ${chunk}`),
+    onFailure: (error) => process.stderr.write(`[connectivity-probe] ${error.message}\n`),
+  });
+  try {
+    await client.start();
+    return await client.callTool("probe_remote", {
+      endpoint,
+      authKey: authKey.toString("base64url"),
+      encryptionKey: encryptionKey.toString("base64url"),
+      expectedModelProfile,
+    });
+  } finally {
+    await client.close().catch(() => {});
+  }
+}
+
 async function shutdown(exitCode = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -514,7 +546,8 @@ try {
   pushAdmin({ type: "pairing", pairing });
   consoleLine(ANSI.yellow, "[tunnel]", publicUrl.href);
   await probeAdminWebSocket({ adminUrl: admin.url, token: admin.token });
-  await probeRemoteEndpoint({
+  await probeRemoteInOnlineSandbox({
+    codexPath,
     endpoint: publicUrl.href,
     authKey,
     encryptionKey,

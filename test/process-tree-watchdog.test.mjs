@@ -47,11 +47,13 @@ async function waitForExit(pid, timeoutMs = 15_000) {
 
 async function runTreeRoot() {
   const leaf = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    detached: true,
     stdio: "ignore",
     windowsHide: true,
   });
+  leaf.unref();
   process.stdout.write(`${leaf.pid}\n`);
-  setInterval(() => {}, 1000);
+  setTimeout(() => process.exit(0), 1500);
 }
 
 async function runWatchdogFixture() {
@@ -63,6 +65,7 @@ async function runWatchdogFixture() {
   });
   watchdog.track(treeRoot.pid);
   const leafPid = Number(await firstLine(treeRoot.stdout));
+  await new Promise((resolvePromise) => treeRoot.once("exit", resolvePromise));
   process.stdout.write(`${JSON.stringify({ treeRootPid: treeRoot.pid, leafPid })}\n`);
   setInterval(() => {}, 1000);
 }
@@ -86,10 +89,10 @@ if (treeRootMode) {
       const reported = JSON.parse(await firstLine(fixture.stdout));
       treeRootPid = Number(reported.treeRootPid);
       leafPid = Number(reported.leafPid);
-      assert.equal(processExists(treeRootPid), true);
+      assert.equal(processExists(treeRootPid), false);
       assert.equal(processExists(leafPid), true);
       process.kill(fixture.pid, "SIGKILL");
-      await Promise.all([waitForExit(treeRootPid), waitForExit(leafPid)]);
+      await waitForExit(leafPid);
       assert.equal(processExists(treeRootPid), false);
       assert.equal(processExists(leafPid), false);
     } finally {
