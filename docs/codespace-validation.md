@@ -10,7 +10,7 @@ Windows実機でChrome起動やプロセス管理を自動化せず、Node.jsサ
 1. `node --version`が22以上であることを確認する。
 2. `codex --version`が成功することを確認する。
 3. `cloudflared --version`が成功することを確認する。
-4. `codex sandbox linux --full-auto /usr/bin/true`が通常の`vscode`ユーザーで成功することを確認する。`sudo codex sandbox setup --elevated --current-user`は使わない。
+4. `node scripts/codex-sandbox-check.mjs --non-interactive`が通常の`vscode`ユーザーで成功することを確認する。Linuxでは内部で`codex sandbox /usr/bin/true`または`/bin/true`を実行し、Windows専用setupや`sudo codex sandbox ...`は使わない。
 5. `gh codespace ssh`/Codespace MCPから接続できるようSSH serverが有効であることを確認する。
 6. `engine/server-engine.html`と対応するVite assetsが生成済みであることを確認する。
 7. `node --test test/*.test.mjs`を実行する。

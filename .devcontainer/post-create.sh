@@ -10,7 +10,7 @@ printf '\n[typed-voice-server] Installing Codex CLI...\n'
 npm install -g "@openai/codex@${CODEX_VERSION}"
 
 printf '\n[typed-voice-server] Verifying Codex Linux sandbox...\n'
-codex sandbox linux --full-auto /usr/bin/true
+node scripts/codex-sandbox-check.mjs --non-interactive
 
 printf '\n[typed-voice-server] Installing cloudflared...\n'
 case "$(uname -m)" in
