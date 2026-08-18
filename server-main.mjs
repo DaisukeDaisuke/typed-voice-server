@@ -12,6 +12,7 @@ import { HistoryStore } from "./server/history-store.mjs";
 import { probeAdminWebSocket, probeRemoteEndpoint } from "./server/connectivity-probe.mjs";
 import { writeEncryptedPairingFile, removeEncryptedPairingFile } from "./server/pairing-file.mjs";
 import { ServerSettingsStore } from "./server/settings-store.mjs";
+import { ProcessTreeWatchdog } from "./server/process-tree-watchdog.mjs";
 
 const projectRoot = dirname(fileURLToPath(import.meta.url));
 const workerDirectory = join(projectRoot, "worker");
@@ -106,6 +107,7 @@ let adminClient = null;
 let historyStore = null;
 let settingsStore = null;
 let pairingFileResolvedPath = null;
+const processWatchdog = new ProcessTreeWatchdog();
 const historySubscriptions = new Map();
 let shuttingDown = false;
 
@@ -203,6 +205,7 @@ async function startAdminSandbox({ codexPath, adminPort }) {
     allowedDirectories: [],
     allowedFiles: [],
     sandboxReadOnlyDirectories: [adminDirectory, webDirectory, workerDirectory, engineDirectory],
+    processTracker: processWatchdog,
   }, {
     onDisconnect(connectionId) {
       controlServer?.disconnect(connectionId);
@@ -356,6 +359,7 @@ async function startTunnel({ codexPath, cloudflaredPath, publicPort }) {
     allowedFiles: [],
     sandboxReadOnlyDirectories: [],
     isBundled: false,
+    processTracker: processWatchdog,
   }, {
     onStdout: acceptOutput,
     onStderr: acceptOutput,
@@ -396,6 +400,7 @@ async function shutdown(exitCode = 0) {
   historySubscriptions.clear();
   await adminClient?.close().catch(() => {});
   adminClient = null;
+  await processWatchdog.close().catch(() => {});
   process.exitCode = exitCode;
 }
 
@@ -403,6 +408,7 @@ process.once("SIGINT", () => void shutdown(0));
 process.once("SIGTERM", () => void shutdown(0));
 
 try {
+  await processWatchdog.start();
   const [chromePath, codexPath, cloudflaredPath] = await Promise.all([
     findChrome(parsed.values.chrome),
     Promise.resolve(findOnPath(parsed.values.codex, ["codex.cmd", "codex.exe", "codex"], "Codex")),
@@ -432,6 +438,7 @@ try {
     engineUrl: engineBaseUrl.href,
     profileDir: chromeProfileDirectory,
     onState: updateState,
+    processTracker: processWatchdog,
   });
   controlServer = new WorkerControlServer({
     key: controlKey,
@@ -461,6 +468,7 @@ try {
     allowedFiles: [],
     sandboxReadOnlyDirectories: [workerDirectory],
     isBundled: false,
+    processTracker: processWatchdog,
   }, {
     onStderr: (chunk) => process.stderr.write(`[worker] ${chunk}`),
     onExit: (code, signal) => updateState({ publicWorker: `停止 (${signal ?? code ?? "unknown"})` }),

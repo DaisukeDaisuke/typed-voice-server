@@ -187,7 +187,7 @@ class EngineTab {
 }
 
 export class ChromeEnginePool {
-  constructor({ count = 1, chromePath, engineUrl, startupTimeoutMs = 600_000, onState = () => {}, profileDir = null }) {
+  constructor({ count = 1, chromePath, engineUrl, startupTimeoutMs = 600_000, onState = () => {}, profileDir = null, processTracker = null }) {
     if (!Number.isSafeInteger(count) || count < 1 || count > 8) throw new Error("multi must be 1..8");
     this.count = count;
     this.chromePath = chromePath;
@@ -196,7 +196,9 @@ export class ChromeEnginePool {
     this.onState = onState;
     if (!profileDir) throw new Error("profileDir is required so the Chrome model cache survives restarts");
     this.profileDir = profileDir;
+    this.processTracker = processTracker;
     this.chrome = null;
+    this.chromeStartError = null;
     this.port = 0;
     this.engines = [];
     this.jobs = new Map();
@@ -227,7 +229,26 @@ export class ChromeEnginePool {
     ];
     const chrome = spawn(this.chromePath, args, { stdio: "ignore", windowsHide: true });
     this.chrome = chrome;
+    this.chromeStartError = null;
+    let tracked = false;
+    const untrack = () => {
+      if (!tracked) return;
+      tracked = false;
+      try { this.processTracker?.untrack(chrome.pid); } catch {}
+    };
+    try {
+      this.processTracker?.track(chrome.pid);
+      tracked = Boolean(this.processTracker);
+    } catch (error) {
+      if (chrome.exitCode === null && !chrome.killed) chrome.kill();
+      throw error;
+    }
+    chrome.once("error", (error) => {
+      untrack();
+      if (this.chrome === chrome) this.chromeStartError = error;
+    });
     chrome.once("exit", (code, signal) => {
+      untrack();
       if (this.chrome !== chrome) return;
       this.onState({
         chrome: `停止 (${signal ?? code ?? "unknown"})`,
@@ -238,6 +259,7 @@ export class ChromeEnginePool {
     });
     const deadline = Date.now() + this.startupTimeoutMs;
     while (Date.now() < deadline) {
+      if (this.chromeStartError) throw this.chromeStartError;
       if (this.chrome.exitCode !== null) throw new Error(`Chrome exited during startup (${this.chrome.exitCode})`);
       try {
         this.port = await readDevToolsPort(this.profileDir);

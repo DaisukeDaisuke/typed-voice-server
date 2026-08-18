@@ -163,15 +163,31 @@ export class CodexSandboxProcess {
     const executionConfig = { ...this.config, command };
     const launch = launchSpec(codexExecutable, executionConfig, this.env);
     this.child = spawn(launch.command, launch.args, launch.options);
+    const childPid = this.child.pid;
+    let tracked = false;
+    const untrack = () => {
+      if (!tracked) return;
+      tracked = false;
+      try { this.config.processTracker?.untrack(childPid); } catch {}
+    };
+    try {
+      this.config.processTracker?.track(childPid);
+      tracked = Boolean(this.config.processTracker);
+    } catch (error) {
+      if (this.child.exitCode === null && !this.child.killed) this.child.kill();
+      throw error;
+    }
     this.child.stdout.setEncoding("utf8");
     this.child.stderr.setEncoding("utf8");
     this.child.stdout.on("data", this.onStdout);
     this.child.stderr.on("data", this.onStderr);
     this.child.once("error", (error) => {
+      untrack();
       this.ready = false;
       if (!this.closed) this.onFailure(error);
     });
     this.child.once("exit", (code, signal) => {
+      untrack();
       this.ready = false;
       if (!this.closed) this.onExit(code, signal);
     });
