@@ -17,9 +17,9 @@ Windows実機でChrome起動やプロセス管理を自動化せず、Node.jsサ
 ## Node.jsサーバー確認
 1. Codex sandbox内で`node server-main.mjs --host 0.0.0.0 --port 3000`を起動する。
 2. `/health`が200を返すことを確認する。
-3. 起動ログに`data/admin/session-token.txt`の絶対パスが出ることを確認する。トークン本体をログへ出してはいけない。
+3. 起動ログに`data/admin/session-token.txt`の絶対パスと、token入りAdmin login URLが出ることを確認する。
 4. `data/admin/session-token.txt`が64桁小文字hexであり、POSIX環境では0600であることを確認する。
-5. 起動ログに`data/worker/session-token.txt`の絶対パスと有効期限が出ることを確認し、Worker token本体がstdioへ出ないことを確認する。
+5. 起動ログに`data/worker/session-token.txt`の絶対パス・有効期限・token入りWorker login URLが出ることを確認する。対応terminalではOSC 8 hyperlinkとしてクリック可能であり、非対応terminalでも完全URLが表示されることを確認する。Admin login URLも同様に起動時へ出す。
 6. `data/worker/session-token.txt`が128桁小文字hexで0600であり、10分window切替後に同じファイルへ新tokenだけが上書きされることを確認する。
 ## Codespaces temporary public deployment
 1. `3000`を`codespace__open_temporary_public_deployment`でpublicにする。

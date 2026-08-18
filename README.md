@@ -8,7 +8,7 @@
 - Workerが切断またはPING timeoutになった場合、そのWorkerは死亡扱いにし、処理中ジョブは全体timeout内なら待ち行列先頭へ戻して別Workerへ再割当します。
 ## Trusted Worker接続認証
 サーバー起動ごとに64-byteのWorker access secretをメモリ内だけで生成し、その秘密と10分単位のtime windowからHMAC-SHA-512の512-bit tokenを導出します。tokenは128桁小文字hexで10分ごとに変化し、window境界の時計ずれ対策として直前tokenは新window開始後30秒間だけ受け付けます。長期secret自体はファイルへ保存しません。
-現在tokenだけを`data/worker/session-token.txt`へ`0600`で原子的に上書きし、起動時とローテーション時にtoken本体ではなく絶対ファイルパスと有効期限だけをstdioへ表示します。サーバー停止時にtoken fileを削除します。
+現在tokenだけを`data/worker/session-token.txt`へ`0600`で原子的に上書きし、起動時とローテーション時に絶対ファイルパス・有効期限・token入りWorker login URLをstdioへ表示します。対応terminalではOSC 8 hyperlinkとしてクリック可能にし、非対応terminalでも完全URLを読める形で出力します。管理tokenも起動時にtoken入りAdmin login URLとしてstdioへ表示します。サーバー停止時にtoken fileを削除します。
 Worker参加者は`/worker/login#<session-token.txtの内容>`を開きます。fragmentはHTTP URLへ送られず、login bootstrapが同一originの`POST /worker/session`本文としてTLS内でtokenを送信します。正しい場合だけHttpOnly・SameSite=StrictのWorker Cookieを発行します。Cookieのtokenが現在windowまたは30秒grace内の直前windowと一致しない場合、Worker assetsと`/worker/ws` WebSocket Upgradeは拒否されます。すでに確立済みの暗号化Worker WSSは10分境界で強制切断せず、新規参加・再接続だけ最新tokenを要求します。
 Workerは合成対象テキストと生成音声を扱えるため、Worker接続トークンは信頼できる参加者だけへ渡します。任意第三者Worker、reputation、多数決による偽音声検出はこの構成の信頼境界に含めません。
 ## Trusted Worker暗号化セッション

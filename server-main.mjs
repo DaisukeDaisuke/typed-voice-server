@@ -55,6 +55,43 @@ function consoleLine(color, label, value) {
   process.stdout.write(`${color}${label}${ANSI.reset} ${value}\n`);
 }
 
+function terminalHyperlink(url, label = url) {
+  const target = String(url);
+  const text = String(label);
+  if (!process.stdout.isTTY || process.env.TERM === "dumb") return target;
+  return `\x1b]8;;${target}\x1b\\${text}\x1b]8;;\x1b\\`;
+}
+
+function browserOrigin() {
+  const configured = parsed.values["public-origin"];
+  if (configured) {
+    const url = new URL(String(configured));
+    url.pathname = "/";
+    url.search = "";
+    url.hash = "";
+    return url.href;
+  }
+  const browserHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+  const normalizedHost = browserHost.includes(":") && !browserHost.startsWith("[") ? `[${browserHost}]` : browserHost;
+  return `http://${normalizedHost}:${port}/`;
+}
+
+function loginUrl(pathname, token) {
+  const url = new URL(pathname, browserOrigin());
+  url.hash = String(token);
+  return url.href;
+}
+
+function printWorkerLoginUrl(token) {
+  const url = loginUrl("worker/login", token);
+  consoleLine(ANSI.cyan, "[worker login]", terminalHyperlink(url, url));
+}
+
+function printAdminLoginUrl() {
+  const url = loginUrl("admin/login", adminSessionToken);
+  consoleLine(ANSI.magenta, "[admin login]", terminalHyperlink(url, url));
+}
+
 function pairingChecksum(endpoint, authKey, encryptionKey) {
   return createHash("sha256")
     .update(Buffer.from("typed-voice-remote-qr/v1\n", "utf8"))
@@ -164,6 +201,7 @@ async function refreshWorkerSessionToken() {
   workerSessionTokenResolvedPath = await writeSessionToken(workerSessionTokenPath, current.token);
   consoleLine(ANSI.yellow, "[worker session token file]", workerSessionTokenResolvedPath);
   consoleLine(ANSI.dim, "[worker token expires]", new Date(current.expiresAt).toISOString());
+  printWorkerLoginUrl(current.token);
   if (shuttingDown) return;
   scheduleWorkerTokenRefresh(millisecondsUntilWorkerTokenRotation() + 25);
 }
@@ -232,6 +270,8 @@ async function setPublicOrigin(value) {
   httpServer?.broadcastPairing();
   consoleLine(ANSI.yellow, "[public WSS]", publicUrl.href);
   consoleLine(ANSI.green, "[pairing file]", pairingFileResolvedPath);
+  printAdminLoginUrl();
+  printWorkerLoginUrl(currentWorkerAccessToken(workerAccessSecret).token);
   return pairing;
 }
 
@@ -338,8 +378,7 @@ try {
   consoleLine(ANSI.cyan, "[worker]", `/worker/`);
   consoleLine(ANSI.magenta, "[remote]", `/remote`);
   consoleLine(ANSI.yellow, "[admin session token file]", adminSessionTokenResolvedPath);
-  consoleLine(ANSI.dim, "[admin]", `/admin/login#<contents of session-token.txt>`);
-  consoleLine(ANSI.dim, "[worker]", `/worker/login#<contents of data/worker/session-token.txt>`);
+  printAdminLoginUrl();
 
   if (parsed.values["public-origin"]) await setPublicOrigin(parsed.values["public-origin"]);
 } catch (error) {
