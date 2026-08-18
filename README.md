@@ -37,5 +37,6 @@ cloudflared tunnel --url http://localhost:3000
 ```
 ## Codespaces開発環境
 `.devcontainer`はNode.js 22、Rust/Kanalizer、SSH server、Codex CLI 0.147.0、cloudflared 2026.8.2、Worker browser buildを準備します。Codex CLI自体は通常の`vscode`ユーザーへ導入します。Codespace内でCodexのLinux sandboxが必要とするnamespace/mount操作を許可するためcontainerは`privileged`で作成し、devcontainer作成時には`node scripts/codex-sandbox-check.mjs --non-interactive`で実際のsandbox起動を確認します。LinuxでWindows専用setupは実行しません。Windowsでは初回のelevated sandbox provisioningを自動実行せず、未初期化時だけ英語の`y/N`確認を出します。手動の管理者セットアップを含むWindows/Linux共通手順は`INSTALL.md`にあります。SSH serverはCodespace MCP/`gh codespace ssh`から実働検証できるよう有効化します。Codespaces forwardingはdevcontainerの`forwardPorts: [3000]`へ固定し、Node.jsサーバーの既定listen先も`0.0.0.0:3000`です。サーバー自身をCodex内部から再帰起動する設計ではなく、必要な実働テスト時にサーバープロセス全体をCodex sandboxで起動します。`.devcontainer`変更後は既存Codespaceのcontainer rebuildが必要です。
+Worker buildで使う`typed-voice`はcommit `407830d7745343443328806cc9996de666990ffe`へ固定しています。post-create再実行時は親serverが生成する`vite.config.js`・`server-engine.html`・`src/server-engine.js`だけを戻してpinし、それ以外のsubmodule変更がある場合は上書きせず停止します。
 ## 実働検証
 Codespaces、temporary public deployment、Quick Tunnel、管理セッショントークン、10分Worker接続トークン、Trusted Worker、Remote TEXT→AUDIOの検証手順は`docs/codespace-validation.md`にあります。
