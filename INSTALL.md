@@ -69,8 +69,8 @@ codex sandbox setup --elevated --current-user
 ```
 
 > [!IMPORTANT]
-> このコマンドではWindowsの管理者承認が求められる場合があります。<br>
-> 表示された内容を確認して承認してください。これはCodex sandboxを準備するための一度きりの昇格です。
+> このコマンドは、管理者として実行する必要があります。
+> cmdを開く際に、詳細メニューから「管理者として実行」をクリックしたコマンドプロンプト(黒い画面)に張り付けてエンターを押す必要があります。
 
 > [!CAUTION]
 > セットアップ完了後も、`Server.cmd`、`server-main.mjs`、普段の開発用PowerShellを管理者として起動しないでください。<br>
