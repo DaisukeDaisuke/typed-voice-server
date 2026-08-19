@@ -583,7 +583,7 @@ async function startStorageWorker() {
   storageWorker = new SandboxWorkerClient(sandboxConfig("storage-worker", storageWorkerPath, {
     read: [serverDirectory],
     write: [dataDirectory],
-    sandbox: "unelevated",
+    sandbox: "elevated",
   }), {
     onStderr: (chunk) => writeSandboxLog("storage", chunk),
     onExit: (code, signal) => sandboxFailure("storage", new Error(`exited (${signal ?? code ?? "unknown"})`)),

@@ -2,8 +2,8 @@
 ## 目的
 Windows実機の用途別Codex sandbox境界を壊さず、Codespacesでは同じstdio protocol・認証・Trusted Worker・Remote暗号通信のうち実行可能な部分を再現可能に確認する。
 ## 前提
-- `server-main.mjs`は通常ユーザー権限の親オーケストレータで、HTTP listenerと永続ファイルwriteを持たない。Admin、Trusted Worker、Remoteは別々のCodex elevated offline sandbox child、storageはCodex unelevated restricted-token childとして起動し、親とはstdioだけで通信する。
-- Windowsでは公開HTTP childすべてに`data/`のCodex deny-readを適用する。storageだけを共有`CodexSandboxOffline` identityから外すことで、このdeny-readをstorageへ波及させず、elevated write-root setupがsandbox groupへ秘密ファイルreadを付与する問題を避ける。
+- `server-main.mjs`は通常ユーザー権限の親オーケストレータで、HTTP listenerと永続ファイルwriteを持たない。Admin、Trusted Worker、Remote、storageは用途別permission profileを持つCodex elevated offline sandbox childとして起動し、親とはstdioだけで通信する。
+- Windowsでは公開HTTP childすべてに`data/`のCodex deny-readを適用し、storageだけに`server/`のreadと`data/`のread/writeを許可する。`unelevated` backendは使用しない。
 - Windowsでは各HTTP workerをCodex offline sandboxの別portに置き、offline sandboxのloopback outbound遮断を横移動防止境界として使う。Quick Tunnelは各portごとに別Codex online workspaceで起動する。
 - Linux/CodespacesのCodex offline sandboxはnetwork namespaceを分離するため、Windowsと同じ「host側cloudflared→offline sandbox loopback listener」はそのまま成立すると仮定しない。Linux実働で到達不能ならsandboxを弱めず、その検証項目をWindows専用として扱う。
 - `--port`はTrusted Worker listenerだけを固定する。Adminは`--admin-port`、Remoteは`--remote-port`で個別に固定できる。実Worker portは起動ログと`data/server/listen-port.txt`で確認する。

@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BrowserWorkerPool } from "../server/engine-pool.mjs";
 import { OrchestratorHttpServer } from "../server/orchestrator-http.mjs";
-import { StdioPeer } from "../server/stdio-peer.mjs";
+import { createFdStdioPeer } from "../server/stdio-peer.mjs";
 import { assertLoopbackConnectDenied } from "../server/boundary-probe.mjs";
 import { verifyWorkerAccessToken } from "../server/worker-access-token.mjs";
 
@@ -52,7 +52,7 @@ function workerStatus() {
   return pool?.status() ?? { engines: [], queued: 0, running: 0, profile: null };
 }
 
-const peer = new StdioPeer(process.stdin, process.stdout, {
+const peer = createFdStdioPeer({
   onEvent(type, payload) {
     if (type === "synthesize") {
       const id = validateJobId(payload?.id);

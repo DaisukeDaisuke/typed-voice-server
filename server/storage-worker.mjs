@@ -6,7 +6,7 @@ import { HistoryStore } from "./history-store.mjs";
 import { encodeEncryptedPairingText, writeEncryptedPairingFile, removeEncryptedPairingFile } from "./pairing-file.mjs";
 import { writePrivateFileAtomic } from "./private-file.mjs";
 import { ServerSettingsStore } from "./settings-store.mjs";
-import { StdioPeer } from "./stdio-peer.mjs";
+import { createFdStdioPeer } from "./stdio-peer.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const historyDirectory = join(projectRoot, "data", "history");
@@ -217,4 +217,4 @@ async function handleRequest(method, params) {
   throw new Error(`unsupported storage request: ${method}`);
 }
 
-new StdioPeer(process.stdin, process.stdout, { onRequest: handleRequest });
+createFdStdioPeer({ onRequest: handleRequest });

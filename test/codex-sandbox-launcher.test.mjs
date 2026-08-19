@@ -23,13 +23,20 @@ test("storage profile grants write only to the data root", () => {
     args: ["C:\\repo\\server\\storage-worker.mjs"],
     allowedDirectories: ["C:\\repo\\data"],
     sandboxReadOnlyDirectories: ["C:\\repo\\server"],
-    sandbox: "unelevated",
+    sandbox: "elevated",
   });
   assert.match(profile, /'C:\\repo\\data'='write'/u);
   assert.match(profile, /':minimal'='read'/u);
   assert.match(profile, /'C:\\repo\\server'='read'/u);
   assert.doesNotMatch(profile, /':root'='read'/u);
   assert.match(profile, /network=\{enabled=false\}\}$/u);
+});
+
+test("unelevated sandbox mode is rejected", () => {
+  assert.throws(() => permissionProfileOverrideFor({
+    command: "C:\\Program Files\\nodejs\\node.exe",
+    sandbox: "unelevated",
+  }), /unelevated Codex sandbox mode is not supported/u);
 });
 
 test("public HTTP worker profile explicitly denies the persistent data root", () => {

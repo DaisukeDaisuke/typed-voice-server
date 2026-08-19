@@ -1,3 +1,5 @@
+import { createReadStream, createWriteStream } from "node:fs";
+
 const DEFAULT_MAX_LINE_BYTES = 2 * 1024 * 1024;
 
 function errorMessage(error) {
@@ -111,4 +113,10 @@ export class StdioPeer {
       this.#write({ kind: "response", id: message.id, ok: false, error: errorMessage(error).slice(0, 4096) });
     }
   }
+}
+
+export function createFdStdioPeer(options = {}) {
+  const input = createReadStream(null, { fd: 0, autoClose: false });
+  const output = createWriteStream(null, { fd: 1, autoClose: false });
+  return new StdioPeer(input, output, options);
 }

@@ -33,6 +33,7 @@ async function canonicalRegularFile(path, label) {
 }
 
 export function permissionProfileOverrideFor(config) {
+  if (config.sandbox === "unelevated") throw new Error("unelevated Codex sandbox mode is not supported");
   const writableRoots = [...new Set(config.allowedDirectories ?? [])];
   const readableRoots = [...new Set([
     ...(config.allowedFiles ?? []),
@@ -59,7 +60,6 @@ export function permissionProfileOverrideFor(config) {
 
 function windowsSandboxOverride(mode) {
   if (mode === "onlineworkspace" || mode === "elevated") return "windows.sandbox='elevated'";
-  if (mode === "unelevated") return "windows.sandbox='unelevated'";
   throw new Error(`unsupported Windows Codex sandbox mode: ${mode}`);
 }
 

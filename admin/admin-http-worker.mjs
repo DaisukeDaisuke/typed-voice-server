@@ -1,7 +1,7 @@
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OrchestratorHttpServer } from "../server/orchestrator-http.mjs";
-import { StdioPeer } from "../server/stdio-peer.mjs";
+import { createFdStdioPeer } from "../server/stdio-peer.mjs";
 import { assertLoopbackConnectDenied } from "../server/boundary-probe.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -12,7 +12,7 @@ let state = {};
 let pairing = null;
 let publicOrigin = null;
 
-const peer = new StdioPeer(process.stdin, process.stdout, {
+const peer = createFdStdioPeer({
   onRequest: async (method, params) => {
     if (method === "start") {
       if (server) throw new Error("admin HTTP worker is already started");

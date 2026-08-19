@@ -1,6 +1,6 @@
 import { RemoteClientHub } from "../server/remote-hub.mjs";
 import { OrchestratorHttpServer } from "../server/orchestrator-http.mjs";
-import { StdioPeer } from "../server/stdio-peer.mjs";
+import { createFdStdioPeer } from "../server/stdio-peer.mjs";
 import { assertLoopbackConnectDenied } from "../server/boundary-probe.mjs";
 
 const MAX_AUDIO_BYTES = 256 * 1024 * 1024;
@@ -124,7 +124,7 @@ const clientBans = new Set();
 let hub = null;
 let server = null;
 
-const peer = new StdioPeer(process.stdin, process.stdout, {
+const peer = createFdStdioPeer({
   onEvent(type, payload) {
     if (["synth-start", "synth-chunk", "synth-end", "synth-error"].includes(type)) {
       try { parentPool.accept(type, payload); } catch (error) {

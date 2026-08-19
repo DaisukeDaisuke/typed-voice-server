@@ -67,11 +67,27 @@ test("startup URLs are grouped into one colorful ready tree and worker token rot
   assert.match(main, /onLog\(\{ stream, text \}\) \{\s*writeSandboxLog\(`cloudflared:\$\{role\}:\$\{stream\}`, text\);/u);
 });
 
-test("public workers deny-read data while storage uses the distinct unelevated identity", async () => {
+test("public workers deny-read data while storage uses the restricted elevated backend", async () => {
   const main = await source("server-main.mjs");
-  assert.match(main, /sandboxConfig\("storage-worker"[\s\S]*?sandbox:\s*"unelevated"/u);
+  assert.match(main, /sandboxConfig\("storage-worker"[\s\S]*?sandbox:\s*"elevated"/u);
   assert.doesNotMatch(main, /sandboxConfig\("storage-worker"[\s\S]*?fullDiskRead:\s*true/u);
   assert.equal((main.match(/denyRead:\s*\[dataDirectory\]/gu) ?? []).length, 3);
+});
+
+test("sandbox worker RPC opens fd 0/1 directly instead of process stdio wrappers", async () => {
+  const [stdio, storage, admin, worker, remote] = await Promise.all([
+    source("server/stdio-peer.mjs"),
+    source("server/storage-worker.mjs"),
+    source("admin/admin-http-worker.mjs"),
+    source("worker/trusted-worker-http-worker.mjs"),
+    source("worker/remote-http-worker.mjs"),
+  ]);
+  assert.match(stdio, /createReadStream\(null, \{ fd: 0, autoClose: false \}\)/u);
+  assert.match(stdio, /createWriteStream\(null, \{ fd: 1, autoClose: false \}\)/u);
+  for (const entrypoint of [storage, admin, worker, remote]) {
+    assert.match(entrypoint, /createFdStdioPeer\(/u);
+    assert.doesNotMatch(entrypoint, /new StdioPeer\(process\.stdin, process\.stdout/u);
+  }
 });
 
 test("Linux direct-test backend is explicit and never replaces the Windows Codex boundary", async () => {
