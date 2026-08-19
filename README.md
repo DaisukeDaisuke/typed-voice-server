@@ -37,6 +37,11 @@ Server.cmd --open-worker=true
 `--open-admin=true`はAdmin用の公開URLを有効にし、`--open-worker=true`はボランティアのTrusted Workerが参加するための公開URLを有効にします。オプションを指定しなかった側は通常どおり外部公開しません。
 > [!WARNING]
 > AdminやTrusted Workerを公開すると、通常起動より公開範囲が広がります。必要なときだけ指定してください。
+
+# GitHub Codespace test
+```
+TYPED_VOICE_LINUX_DIRECT_TEST=1  node server-main.mjs --open-admin=true --open-worker=true
+```
 ## インストール
 [Windows向けインストール手順](INSTALL.md)
 ## 詳細仕様
