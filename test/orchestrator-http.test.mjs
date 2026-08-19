@@ -177,7 +177,18 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     assert.match(acceptedUpgrade, /^HTTP\/1\.1 101 Switching Protocols/u);
 
     const missingWorker = await httpRequest(port, { path: "/worker/" });
-    assert.equal(missingWorker.statusCode, 404);
+    assert.equal(missingWorker.statusCode, 302);
+    assert.equal(missingWorker.headers.location, "/worker/login");
+    assert.match(missingWorker.headers["set-cookie"]?.[0] ?? "", /^typed_voice_worker_session=;/u);
+    assert.match(missingWorker.headers["set-cookie"]?.[0] ?? "", /Max-Age=0/u);
+
+    const malformedWorkerCookie = await httpRequest(port, {
+      path: "/worker/",
+      cookie: "typed_voice_worker_session=%E0%A4%A",
+    });
+    assert.equal(malformedWorkerCookie.statusCode, 302);
+    assert.equal(malformedWorkerCookie.headers.location, "/worker/login");
+    // 裏AI編集あり / isolation: typedvoice-worker-auth-20260819 / END
     const workerLogin = await httpRequest(port, { path: "/worker/login" });
     assert.equal(workerLogin.statusCode, 200);
     assert.match(workerLogin.body, /128/u);
@@ -267,7 +278,8 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     assert.equal(workerResetCalls, 1);
 
     const expiredWorkerSession = await httpRequest(port, { path: "/worker/", cookie: workerCookie });
-    assert.equal(expiredWorkerSession.statusCode, 404);
+    assert.equal(expiredWorkerSession.statusCode, 302);
+    assert.equal(expiredWorkerSession.headers.location, "/worker/login");
 
     const proxiedReset = await httpRequest(port, {
       method: "POST",

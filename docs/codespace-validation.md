@@ -20,7 +20,7 @@ Windows実機でChrome起動やプロセス管理を自動化せず、Node.jsサ
 3. 起動ログに`data/admin/session-token.txt`の絶対パスと、token入りAdmin login URLが出ることを確認する。
 4. `data/admin/session-token.txt`が64桁小文字hexであり、POSIX環境では0600であることを確認する。
 5. 起動ログに`data/worker/session-token.txt`の絶対パス・有効期限・token入りWorker login URLが出ることを確認する。対応terminalではOSC 8 hyperlinkとしてクリック可能であり、非対応terminalでも完全URLが表示されることを確認する。Admin login URLも同様に起動時へ出す。
-6. `data/worker/session-token.txt`が128桁小文字hexで0600であり、10分window切替後に同じファイルへ新tokenだけが上書きされることを確認する。
+6. `data/worker/session-token.txt`が128桁小文字hexであり、POSIX環境では0600であること、10分window切替後に同じファイルへ新tokenだけが上書きされることを確認する。WindowsではPOSIX mode/chmodを使わず実行ユーザーのWindows ACLを継承することを確認する。
 ## Codespaces temporary public deployment
 1. `data/server/listen-port.txt`の実ポートを`codespace__open_temporary_public_deployment`でpublicにする。
 2. tokenなしの`https://<codespace-host>/admin/`が管理画面を返さないことを確認する。
@@ -49,7 +49,7 @@ Windows実機でChrome起動やプロセス管理を自動化せず、Node.jsサ
 11. 最初のタブのdownload/検証完了後、2枚目が外部model assetsを再downloadせず`/__typed_voice_assets/...`の共有Cache Storageから読み、自分自身のWebGPU/WASM engineを独立初期化することを確認する。モデル実体・推論workerはタブ間共有しない。
 12. `/health`の`workers`が2になり、両タブがreadyになることを確認する。
 ## Worker接続の緊急失効
-1. 起動時に`data/worker/reset-token.txt`が生成され、改行なし128桁小文字hex、POSIXでは0600であることを確認する。reset secret本体はstdioへ出さない。
+1. 起動時に`data/worker/reset-token.txt`が生成され、改行なし128桁小文字hex、POSIXでは0600であることを確認する。WindowsではPOSIX mode/chmodを使わず実行ユーザーのWindows ACLを継承することを確認する。reset secret本体はstdioへ出さない。
 2. `POST /worker/reset`は`127.0.0.1`/`::1`からの直接接続だけを受け付けることを確認する。`Forwarded`または`X-Forwarded-*`付きのreverse proxy要求は、正しいreset secretでも404にする。
 3. `node scripts/reset-worker-access.mjs`を実行し、reset secretを引数/stdoutへ露出せずlocalhostへPOSTできることを確認する。
 4. reset直前に2 Workerを接続した状態でhelperを実行し、`/health`が`workers: 2`から`workers: 0`へ変化し、両WSSが1008で切断されることを確認する。

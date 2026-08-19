@@ -67,7 +67,12 @@ function cookieValue(request, name) {
     const index = part.indexOf("=");
     if (index < 0) continue;
     if (part.slice(0, index).trim() !== name) continue;
-    return decodeURIComponent(part.slice(index + 1).trim());
+    try {
+      return decodeURIComponent(part.slice(index + 1).trim());
+    } catch {
+      // 壊れたCookie値は未認証として扱い、呼び出し側でログイン導線へ戻せるようにする。
+      return null;
+    }
   }
   return null;
 }
@@ -83,6 +88,22 @@ function adminCookie(token, request) {
 
 function workerCookie(token, request) {
   return `${WORKER_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/worker${isHttps(request) ? "; Secure" : ""}`;
+}
+
+function clearWorkerCookie(request) {
+  return `${WORKER_COOKIE}=; HttpOnly; SameSite=Strict; Path=/worker; Max-Age=0${isHttps(request) ? "; Secure" : ""}`;
+}
+
+function redirectWorkerLogin(request, response) {
+  response.writeHead(302, {
+    Location: "/worker/login",
+    "Set-Cookie": clearWorkerCookie(request),
+    "Cache-Control": "no-store",
+    "Content-Length": "0",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+  });
+  response.end();
 }
 
 function requestOrigin(request) {
@@ -381,7 +402,9 @@ export class OrchestratorHttpServer {
       return;
     }
     if (request.method === "GET" && (url.pathname === "/worker" || url.pathname === "/worker/")) {
-      if (!this.#workerAuthorized(request)) return noAccess(response);
+      // Worker本体へ入る前に認証を確定する。未認証・失効済み・破損Cookieなら
+      // engine HTML（チュートリアルを含む）を一切返さず、ログインページへ戻す。
+      if (!this.#workerAuthorized(request)) return redirectWorkerLogin(request, response);
       await this.#serveEngineAsset("server-engine.html", response, false);
       return;
     }

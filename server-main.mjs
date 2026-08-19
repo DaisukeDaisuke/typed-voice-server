@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { chmod, mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -10,6 +10,7 @@ import { encodeEncryptedPairingText, writeEncryptedPairingFile, removeEncryptedP
 import { QuickTunnelProcess } from "./server/quick-tunnel.mjs";
 import { RemoteClientHub } from "./server/remote-hub.mjs";
 import { ServerSettingsStore } from "./server/settings-store.mjs";
+import { writePrivateFileAtomic } from "./server/private-file.mjs";
 import {
   currentWorkerAccessToken,
   millisecondsUntilWorkerTokenRotation,
@@ -126,23 +127,11 @@ function buildPairing(endpoint, authKey, encryptionKey) {
 }
 
 async function writeSessionToken(path, token) {
-  await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp`;
-  await writeFile(temporary, `${token}\n`, { encoding: "utf8", mode: 0o600 });
-  await chmod(temporary, 0o600).catch(() => {});
-  await rename(temporary, path);
-  await chmod(path, 0o600).catch(() => {});
-  return realpath(path);
+  return writePrivateFileAtomic(path, `${token}\n`, { encoding: "utf8" });
 }
 
 async function writeRawSecretToken(path, token) {
-  await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp`;
-  await writeFile(temporary, token, { encoding: "utf8", mode: 0o600 });
-  await chmod(temporary, 0o600).catch(() => {});
-  await rename(temporary, path);
-  await chmod(path, 0o600).catch(() => {});
-  return realpath(path);
+  return writePrivateFileAtomic(path, token, { encoding: "utf8" });
 }
 
 async function removeSessionToken(path) {

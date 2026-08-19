@@ -1,6 +1,8 @@
 import { createCipheriv } from "node:crypto";
-import { mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { rm } from "node:fs/promises";
+
+import { writePrivateFileAtomic } from "./private-file.mjs";
+
 
 const FILE_MAGIC = Buffer.from("TVRKEY1\0", "ascii");
 const FILE_AAD = Buffer.from("typed-voice-remote-pairing-file/v1", "utf8");
@@ -21,12 +23,8 @@ export function encodeEncryptedPairingText(pairing, iv) {
 
 export async function writeEncryptedPairingFile(path, pairing, { randomBytes }) {
   if (typeof randomBytes !== "function") throw new Error("randomBytes function is required");
-  await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp`;
   const bytes = encodeEncryptedPairingFile(pairing, randomBytes(12));
-  await writeFile(temporary, bytes, { mode: 0o600 });
-  await rename(temporary, path);
-  return realpath(path);
+  return writePrivateFileAtomic(path, bytes);
 }
 
 export async function removeEncryptedPairingFile(path) {
