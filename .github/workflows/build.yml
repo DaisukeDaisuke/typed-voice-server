@@ -67,6 +67,10 @@ jobs:
         run: |
           npm test
           npm run build
+      - name: Normalize Server.cmd to Windows CRLF
+        run: |
+          sed -i 's/\r$//' Server.cmd
+          sed -i 's/$/\r/' Server.cmd
       - name: Assemble local release artifact
         run: |
           mkdir -p dist/typed-voice-server/engine
