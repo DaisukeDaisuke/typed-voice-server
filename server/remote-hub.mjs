@@ -17,6 +17,7 @@ import { acceptWebSocketUpgrade } from "../worker/websocket.mjs";
 const MAX_TEXT_BYTES = 16 * 1024;
 const AUDIO_CHUNK_BYTES = 64 * 1024;
 const WORKER_STATUS_INTERVAL_MS = 5_000;
+const TRUSTED_WORKER_HELLO = 1;
 const MODEL_PROFILES = new Set(["fp32", "fp16", "mobile-int8", "mobile-int4"]);
 
 function errorPayload(code, message) {
@@ -59,6 +60,7 @@ export class RemoteClientHub {
     isClientBanned = () => false,
     onStatus = () => {},
     onHistory = () => {},
+    onWorkerConnection = null,
   }) {
     if (!pool || typeof pool.synthesize !== "function") throw new Error("worker pool is required");
     this.pool = pool;
@@ -69,6 +71,7 @@ export class RemoteClientHub {
     this.isClientBanned = isClientBanned;
     this.onStatus = onStatus;
     this.onHistory = onHistory;
+    this.onWorkerConnection = typeof onWorkerConnection === "function" ? onWorkerConnection : null;
     this.clients = new Set();
     this.pending = new Map();
     this.workerStatusTimer = null;
@@ -78,7 +81,25 @@ export class RemoteClientHub {
   handleUpgrade(request, socket, head) {
     if (this.closed) throw new Error("remote hub is closed");
     const ws = acceptWebSocketUpgrade(request, socket, head, { path: "/remote", maxMessageBytes: 1024 * 1024 });
-    this.#attachClient(ws);
+    if (!this.onWorkerConnection) {
+      this.#attachClient(ws);
+      return;
+    }
+    const timer = setTimeout(() => ws.close(1008), AUTH_DEADLINE_MS);
+    ws.onClose = () => clearTimeout(timer);
+    ws.onMessage = (payload) => {
+      clearTimeout(timer);
+      const first = Buffer.from(payload);
+      if (first[0] === Opcode.HELLO_CLIENT) {
+        this.#attachClient(ws, first);
+        return;
+      }
+      if (first[0] === TRUSTED_WORKER_HELLO) {
+        this.onWorkerConnection(ws, first);
+        return;
+      }
+      ws.close(1008);
+    };
   }
 
   status() {
@@ -151,7 +172,7 @@ export class RemoteClientHub {
     this.#emitStatus();
   }
 
-  #attachClient(ws) {
+  #attachClient(ws, firstPayload = null) {
     const client = {
       ws,
       connectionId: randomId().toString(16).padStart(16, "0"),
@@ -179,6 +200,13 @@ export class RemoteClientHub {
       }
     };
     ws.onClose = () => void this.#dropClient(client);
+    if (firstPayload) {
+      try {
+        this.#handleClientMessage(client, firstPayload);
+      } catch {
+        ws.close(1008);
+      }
+    }
   }
 
   async #dropClient(client) {

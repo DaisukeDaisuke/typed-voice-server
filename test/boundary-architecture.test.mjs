@@ -59,6 +59,7 @@ test("startup URLs are grouped into one colorful ready tree and worker token rot
     assert.match(main, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "u"));
   }
   assert.match(main, /index === rows\.length - 1 \? "└──" : "├──"/u);
+  assert.match(main, /setTimeout\(resolvePromise, 2_000\)[\s\S]*?serverReady = true;\s*printReadyTree\(\);/u);
   assert.match(main, /serverReady = true;\s*printReadyTree\(\);/u);
   assert.match(main, /async function refreshWorkerSessionToken\(\)[\s\S]*?printReadyTree\(\);/u);
   assert.match(main, /async function resetWorkerAccess\(\)[\s\S]*?printReadyTree\(\);/u);

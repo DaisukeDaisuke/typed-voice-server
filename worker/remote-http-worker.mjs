@@ -120,11 +120,54 @@ class ParentWorkerPool {
 
 const parentPool = new ParentWorkerPool();
 const clientBans = new Set();
+const workerProxies = new Map();
 let hub = null;
 let server = null;
+let nextWorkerProxyId = 1;
+
+function workerProxyId(value) {
+  const id = String(value ?? "");
+  if (!/^[0-9]{1,20}$/u.test(id)) throw new Error("invalid worker proxy id");
+  return id;
+}
+
+function workerProxyPayload(value) {
+  const encoded = String(value ?? "");
+  if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(encoded) || encoded.length > 1_500_000) {
+    throw new Error("invalid worker proxy payload");
+  }
+  return Buffer.from(encoded, "base64");
+}
+
+function attachWorkerProxy(ws, firstPayload) {
+  const id = String(nextWorkerProxyId++);
+  workerProxies.set(id, ws);
+  ws.onMessage = (payload) => {
+    peer.event("worker-proxy-message", { id, data: Buffer.from(payload).toString("base64") });
+  };
+  ws.onClose = () => {
+    if (!workerProxies.delete(id)) return;
+    peer.event("worker-proxy-remote-close", { id });
+  };
+  peer.event("worker-proxy-open", { id });
+  peer.event("worker-proxy-message", { id, data: Buffer.from(firstPayload).toString("base64") });
+}
 
 const peer = createFdStdioPeer({
   onEvent(type, payload) {
+    if (type === "worker-proxy-send") {
+      const ws = workerProxies.get(workerProxyId(payload?.id));
+      if (ws && !ws.closed) ws.sendBinary(workerProxyPayload(payload?.data));
+      return;
+    }
+    if (type === "worker-proxy-close") {
+      const ws = workerProxies.get(workerProxyId(payload?.id));
+      if (ws && !ws.closed) {
+        const code = Number(payload?.code);
+        ws.close(Number.isSafeInteger(code) && code >= 1000 && code <= 4999 ? code : 1000);
+      }
+      return;
+    }
     if (["synth-start", "synth-chunk", "synth-end", "synth-error"].includes(type)) {
       try { parentPool.accept(type, payload); } catch (error) {
         const id = String(payload?.id ?? "");
@@ -165,6 +208,7 @@ const peer = createFdStdioPeer({
         onHistory(entry) {
           peer.event("history", { entry });
         },
+        onWorkerConnection: attachWorkerProxy,
       });
       server = new OrchestratorHttpServer({
         host: "127.0.0.1",
@@ -188,6 +232,8 @@ const peer = createFdStdioPeer({
     if (method === "disconnect") return hub.disconnect(params?.connectionId);
     if (method === "disconnect-client-hash") return hub.disconnectClientHash(params?.clientHash);
     if (method === "close") {
+      for (const ws of [...workerProxies.values()]) ws.close(1001);
+      workerProxies.clear();
       await hub?.close();
       await server?.close();
       parentPool.close();

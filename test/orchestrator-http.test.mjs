@@ -12,6 +12,7 @@ const sessionToken = "a".repeat(64);
 const workerToken = "c".repeat(128);
 const workerResetToken = "e".repeat(128);
 const workerPageUrl = "https://daisukedaisuke.github.io/typed-voice/worker.html";
+const workerServerUrl = "wss://remote.example/remote";
 
 function httpRequest(port, { method = "GET", path, cookie = null, origin = null, forwardedHost = null, forwardedProto = null, hostHeader = null, body = null }) {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -157,6 +158,7 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     publicOriginProvider: () => "https://public.example",
     workerResetToken,
     workerPageUrl,
+    workerServerUrlProvider: () => workerServerUrl,
     onWorkerReset: async () => { workerResetCalls += 1; },
     workerTokenValidator: (token) => token === workerToken,
   });
@@ -245,7 +247,8 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     assert.equal(workerLogin.statusCode, 200);
     assert.match(workerLogin.body, /128/u);
     assert.match(workerLogin.body, /daisukedaisuke\.github\.io\/typed-voice\/worker\.html/u);
-    assert.match(workerLogin.body, /searchParams\.set\("server", server\)/u);
+    assert.match(workerLogin.body, /wss:\/\/remote\.example\/remote/u);
+    assert.match(workerLogin.body, /searchParams\.set\("server", workerServerUrl\)/u);
     assert.match(workerLogin.body, /destination\.hash = token/u);
 
     const wrongWorker = await httpRequest(port, {

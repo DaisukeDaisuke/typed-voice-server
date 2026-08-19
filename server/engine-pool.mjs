@@ -173,15 +173,22 @@ export class BrowserWorkerPool {
   }
 
   handleUpgrade(request, socket, head, { accessTokenValidator = null } = {}) {
-    if (this.closed) throw new Error("worker pool is closed");
-    if (this.workers.size >= MAX_WORKERS) throw new Error("worker limit reached");
-    if (accessTokenValidator !== null && typeof accessTokenValidator !== "function") {
-      throw new Error("worker access token validator must be a function");
-    }
     const ws = acceptWebSocketUpgrade(request, socket, head, {
       path: "/worker/ws",
       maxMessageBytes: MAX_WORKER_MESSAGE_BYTES,
     });
+    this.attachTransport(ws, { accessTokenValidator });
+  }
+
+  attachTransport(ws, { accessTokenValidator = null } = {}) {
+    if (this.closed) throw new Error("worker pool is closed");
+    if (this.workers.size >= MAX_WORKERS) throw new Error("worker limit reached");
+    if (!ws || typeof ws.sendBinary !== "function" || typeof ws.close !== "function") {
+      throw new Error("worker transport is invalid");
+    }
+    if (accessTokenValidator !== null && typeof accessTokenValidator !== "function") {
+      throw new Error("worker access token validator must be a function");
+    }
     this.#attach(ws, accessTokenValidator);
   }
 

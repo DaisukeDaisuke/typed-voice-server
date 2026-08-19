@@ -15,6 +15,48 @@ let pool = null;
 let server = null;
 let workerAccessSecret = null;
 let publicOrigin = null;
+let workerServerUrl = null;
+const workerProxies = new Map();
+
+function workerProxyId(value) {
+  const id = String(value ?? "");
+  if (!/^[0-9]{1,20}$/u.test(id)) throw new Error("invalid worker proxy id");
+  return id;
+}
+
+function workerProxyPayload(value) {
+  const encoded = String(value ?? "");
+  if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(encoded) || encoded.length > 1_500_000) {
+    throw new Error("invalid worker proxy payload");
+  }
+  return Buffer.from(encoded, "base64");
+}
+
+function finishWorkerProxy(proxy, { notifyRemote = false, code = 1000 } = {}) {
+  if (!proxy || proxy.closed) return;
+  proxy.closed = true;
+  workerProxies.delete(proxy.id);
+  if (notifyRemote) peer.event("worker-proxy-close", { id: proxy.id, code });
+  proxy.onClose();
+}
+
+function createWorkerProxy(id) {
+  const proxy = {
+    id,
+    closed: false,
+    onMessage: () => {},
+    onClose: () => {},
+    sendBinary(payload) {
+      if (proxy.closed) return false;
+      return peer.event("worker-proxy-send", { id, data: Buffer.from(payload).toString("base64") });
+    },
+    close(code = 1000) {
+      finishWorkerProxy(proxy, { notifyRemote: true, code });
+    },
+  };
+  workerProxies.set(id, proxy);
+  return proxy;
+}
 
 function decodeWorkerSecret(value) {
   const text = String(value ?? "");
@@ -53,6 +95,31 @@ function workerStatus() {
 
 const peer = createFdStdioPeer({
   onEvent(type, payload) {
+    if (type === "worker-proxy-open") {
+      const id = workerProxyId(payload?.id);
+      if (workerProxies.has(id)) return;
+      const proxy = createWorkerProxy(id);
+      try {
+        pool.attachTransport(proxy, {
+          accessTokenValidator(token) {
+            return verifyWorkerAccessToken(workerAccessSecret, token);
+          },
+        });
+      } catch {
+        proxy.close(1008);
+      }
+      return;
+    }
+    if (type === "worker-proxy-message") {
+      const proxy = workerProxies.get(workerProxyId(payload?.id));
+      if (proxy && !proxy.closed) proxy.onMessage(workerProxyPayload(payload?.data));
+      return;
+    }
+    if (type === "worker-proxy-remote-close") {
+      const proxy = workerProxies.get(workerProxyId(payload?.id));
+      finishWorkerProxy(proxy);
+      return;
+    }
     if (type === "synthesize") {
       const id = validateJobId(payload?.id);
       const text = String(payload?.text ?? "");
@@ -96,6 +163,7 @@ const peer = createFdStdioPeer({
         engineRoot: existsSync(join(builtEngineRoot, "index.html")) ? builtEngineRoot : sourceEngineRoot,
         workerPool: pool,
         publicOriginProvider: () => publicOrigin,
+        workerServerUrlProvider: () => workerServerUrl,
         workerResetToken: params?.workerResetToken,
         workerPageUrl: params?.workerPageUrl,
         workerTokenValidator(token) {
@@ -121,6 +189,12 @@ const peer = createFdStdioPeer({
       publicOrigin = params?.origin == null ? null : String(params.origin);
       return true;
     }
+    if (method === "set-worker-server-url") {
+      const url = new URL(String(params?.url ?? ""));
+      if (url.protocol !== "wss:" && url.protocol !== "ws:") throw new Error("worker server URL must use WebSocket");
+      workerServerUrl = url.href;
+      return true;
+    }
     if (method === "set-worker-secret") {
       workerAccessSecret = decodeWorkerSecret(params?.workerAccessSecret);
       pool.disconnectAll(1008);
@@ -130,6 +204,7 @@ const peer = createFdStdioPeer({
     if (method === "close") {
       await server?.close();
       await pool?.close();
+      workerProxies.clear();
       server = null;
       pool = null;
       return true;

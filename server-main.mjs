@@ -548,6 +548,7 @@ async function setRolePublicOrigin(role, value) {
     });
     pairingPayload = sanitizePairing(stored.pairing, publicUrl.href);
     pairingFileResolvedPath = sanitizeDataPath(stored.path);
+    if (trustedWorker) await trustedWorker.request("set-worker-server-url", { url: publicUrl.href });
     updateState({
       pairingReady: true,
       pairingEndpoint: publicUrl.hostname,
@@ -611,6 +612,10 @@ async function startTrustedWorker() {
       throw new Error(`unsupported trusted-worker parent request: ${method}`);
     },
     onEvent(type, payload) {
+      if (type === "worker-proxy-send" || type === "worker-proxy-close") {
+        remoteWorker?.event(type, payload);
+        return;
+      }
       if (type === "worker-state") {
         workerStatus = sanitizeWorkerStatus(payload?.status);
         const ready = workerStatus.engines.filter((worker) => worker.authenticated && worker.connected && worker.info?.ready).length;
@@ -655,6 +660,10 @@ async function startRemoteWorker() {
     denyRead: [dataDirectory],
   }), {
     onEvent(type, payload) {
+      if (["worker-proxy-open", "worker-proxy-message", "worker-proxy-remote-close"].includes(type)) {
+        trustedWorker.event(type, payload);
+        return;
+      }
       if (type === "synth-request") {
         trustedWorker.event("synthesize", payload);
         return;
@@ -805,6 +814,7 @@ try {
     updateState({ tunnel: "Quick Tunnel無効", pairingReady: false });
   }
   recomputeOverall();
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000));
   serverReady = true;
   printReadyTree();
 } catch (error) {
