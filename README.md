@@ -19,6 +19,10 @@ Windowsで初めて使う場合は、まず [INSTALL.md](INSTALL.md) の手順�
 通常起動では、AdminとTrusted Workerは外部へ公開せず、Remote接続だけを公開します。<br>
 ボランティアのTrusted Workerをインターネット越しに参加させたい場合や、Admin画面を外部から管理したい場合は、`Server.cmd` に公開オプションを付けて起動できます。
 両方を公開する場合は、展開した`typed-voice-server`フォルダーでコマンドプロンプトを開き、次を実行します。
+
+> [!IMPORTANT]
+> これらのページへのアクセスには、起動時に表示される認証文字を含む、urlが正確に必要です。<br>
+
 ```text
 Server.cmd --open-admin=true --open-worker=true
 ```

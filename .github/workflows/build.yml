@@ -73,6 +73,7 @@ jobs:
           cp server-main.mjs docker.mjs Server.cmd package.json README.md INSTALL.md SPECIFICATION.md LICENSE dist/typed-voice-server/
           cp -R server admin worker web docs dist/typed-voice-server/
           cp -R typed-voice/dist/. dist/typed-voice-server/engine/
+          cp typed-voice/THIRD_PARTY_NOTICES.md dist/THIRD_PARTY_NOTICES.md
           cat > dist/RELEASE_NOTES.md <<'EOF'
           CI-built typed-voice-server runtime.
 
@@ -85,12 +86,14 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: typed-voice-server-local
-          path: dist/typed-voice-server.zip
+          path: |
+            dist/typed-voice-server.zip
+            dist/THIRD_PARTY_NOTICES.md
           if-no-files-found: error
       - name: Update latest runtime release
         uses: ncipollo/release-action@v1.21.0
         with:
-          artifacts: ${{ github.workspace }}/dist/typed-voice-server.zip
+          artifacts: ${{ github.workspace }}/dist/typed-voice-server.zip,${{ github.workspace }}/dist/THIRD_PARTY_NOTICES.md
           artifactErrorsFailBuild: true
           bodyFile: ${{ github.workspace }}/dist/RELEASE_NOTES.md
           makeLatest: true
