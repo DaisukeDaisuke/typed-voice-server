@@ -4,12 +4,12 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13 <25"
   },
   "scripts": {
     "reset:worker-access": "node scripts/reset-worker-access.mjs",
     "sandbox:check": "node scripts/codex-sandbox-check.mjs",
-    "start": "node server-main.mjs --host 0.0.0.0",
+    "start": "node server-main.mjs",
     "test": "node --test test/*.test.mjs"
   }
 }

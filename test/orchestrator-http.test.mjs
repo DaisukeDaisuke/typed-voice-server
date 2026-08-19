@@ -12,9 +12,10 @@ const sessionToken = "a".repeat(64);
 const workerToken = "c".repeat(128);
 const workerResetToken = "e".repeat(128);
 
-function httpRequest(port, { method = "GET", path, cookie = null, origin = null, forwardedHost = null, forwardedProto = null, body = null }) {
+function httpRequest(port, { method = "GET", path, cookie = null, origin = null, forwardedHost = null, forwardedProto = null, hostHeader = null, body = null }) {
   return new Promise((resolvePromise, rejectPromise) => {
     const headers = {};
+    if (hostHeader) headers.Host = hostHeader;
     if (cookie) headers.Cookie = cookie;
     if (origin) headers.Origin = origin;
     if (forwardedHost) headers["X-Forwarded-Host"] = forwardedHost;
@@ -43,6 +44,53 @@ function httpRequest(port, { method = "GET", path, cookie = null, origin = null,
     request.end();
   });
 }
+
+test("role別listenerは別roleを公開せずproxy経路ではport固有Host capabilityを要求する", async () => {
+  const fakePool = {
+    status() { return { engines: [], running: 0, queued: 0, profile: "fp16" }; },
+    handleUpgrade(_request, socket) { socket.destroy(); },
+  };
+  const capabilityHost = "tv-worker-0123456789abcdef.invalid";
+  const server = new OrchestratorHttpServer({
+    host: "127.0.0.1",
+    port: 0,
+    roles: ["worker"],
+    originCapabilityHost: capabilityHost,
+    engineRoot: resolve(projectRoot, "engine-source"),
+    workerPool: fakePool,
+    publicOriginProvider: () => "https://public.example",
+    workerTokenValidator: (token) => token === workerToken,
+  });
+  try {
+    const address = await server.start();
+    const port = address.port;
+    const admin = await httpRequest(port, { path: "/admin/login" });
+    assert.equal(admin.statusCode, 404);
+
+    const missingCapability = await httpRequest(port, {
+      method: "POST",
+      path: "/worker/session",
+      origin: "https://public.example",
+      forwardedHost: "public.example",
+      forwardedProto: "https",
+      body: workerToken,
+    });
+    assert.equal(missingCapability.statusCode, 404);
+
+    const accepted = await httpRequest(port, {
+      method: "POST",
+      path: "/worker/session",
+      hostHeader: capabilityHost,
+      origin: "https://public.example",
+      forwardedHost: "public.example",
+      forwardedProto: "https",
+      body: workerToken,
+    });
+    assert.equal(accepted.statusCode, 204);
+  } finally {
+    await server.close();
+  }
+});
 
 function websocketUpgrade(port, cookie = null, origin = null, path = "/admin/ws", forwardedHost = null, forwardedProto = null) {
   return new Promise((resolvePromise, rejectPromise) => {

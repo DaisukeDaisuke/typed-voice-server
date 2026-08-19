@@ -1,9 +1,12 @@
 # typed-voice-server Codespaces実働検証
 ## 目的
-Windows実機でChrome起動やプロセス管理を自動化せず、Node.jsサーバー単体をCodespacesで再現可能に動かし、公開経路・管理認証・短寿命Worker認証・Trusted Worker・Remote暗号通信を実経路で確認する。
+Windows実機の用途別Codex sandbox境界を壊さず、Codespacesでは同じstdio protocol・認証・Trusted Worker・Remote暗号通信のうち実行可能な部分を再現可能に確認する。
 ## 前提
-- サーバーは`node server-main.mjs --host 0.0.0.0`で1プロセス起動し、`--port`未指定時はOSが空いているポートを割り当てる。実ポートは起動ログと`data/server/listen-port.txt`で確認する。
-- Codexを使う場合はサーバープロセス全体をCodespace内のCodex sandboxで起動する。サーバー自身からCodexを再帰起動しない。
+- `server-main.mjs`は通常ユーザー権限の親オーケストレータで、HTTP listenerと永続ファイルwriteを持たない。Admin、Trusted Worker、Remoteは別々のCodex elevated offline sandbox child、storageはCodex unelevated restricted-token childとして起動し、親とはstdioだけで通信する。
+- Windowsでは公開HTTP childすべてに`data/`のCodex deny-readを適用する。storageだけを共有`CodexSandboxOffline` identityから外すことで、このdeny-readをstorageへ波及させず、elevated write-root setupがsandbox groupへ秘密ファイルreadを付与する問題を避ける。
+- Windowsでは各HTTP workerをCodex offline sandboxの別portに置き、offline sandboxのloopback outbound遮断を横移動防止境界として使う。Quick Tunnelは各portごとに別Codex online workspaceで起動する。
+- Linux/CodespacesのCodex offline sandboxはnetwork namespaceを分離するため、Windowsと同じ「host側cloudflared→offline sandbox loopback listener」はそのまま成立すると仮定しない。Linux実働で到達不能ならsandboxを弱めず、その検証項目をWindows専用として扱う。
+- `--port`はTrusted Worker listenerだけを固定する。Adminは`--admin-port`、Remoteは`--remote-port`で個別に固定できる。実Worker portは起動ログと`data/server/listen-port.txt`で確認する。
 - Chrome/CDP自動起動、PID探索、Chrome kill、Chrome watchdogは行わない。
 - WebGPU Workerは現在の10分Worker接続トークンを持つ信頼済み参加者だけが`/worker/login#<token>`から認証し、参加UIを押した場合だけ増える。
 ## devcontainer確認
@@ -15,24 +18,25 @@ Windows実機でChrome起動やプロセス管理を自動化せず、Node.jsサ
 6. `engine/server-engine.html`と対応するVite assetsが生成済みであることを確認する。
 7. `node --test test/*.test.mjs`を実行する。
 ## Node.jsサーバー確認
-1. Codex sandbox内で`node server-main.mjs --host 0.0.0.0`を起動する。
-2. `/health`が200を返すことを確認する。
+1. 通常ユーザー権限で`node server-main.mjs`を起動し、親プロセス自身がlistenしていないことを確認する。親全体をCodex sandboxへ入れて子sandboxをネストしない。
+2. 起動ログにAdmin、Trusted Worker、Remoteの3つの異なるloopback portが表示されることを確認する。Windowsでは各portのlistenerが別Codex offline sandbox childであることを確認する。
 3. 起動ログに`data/admin/session-token.txt`の絶対パスと、token入りAdmin login URLが出ることを確認する。
 4. `data/admin/session-token.txt`が64桁小文字hexであり、POSIX環境では0600であることを確認する。
 5. 起動ログに`data/worker/session-token.txt`の絶対パス・有効期限・token入りWorker login URLが出ることを確認する。対応terminalではOSC 8 hyperlinkとしてクリック可能であり、非対応terminalでも完全URLが表示されることを確認する。Admin login URLも同様に起動時へ出す。
 6. `data/worker/session-token.txt`が128桁小文字hexであり、POSIX環境では0600であること、10分window切替後に同じファイルへ新tokenだけが上書きされることを確認する。WindowsではPOSIX mode/chmodを使わず実行ユーザーのWindows ACLを継承することを確認する。
 ## Codespaces temporary public deployment
-1. `data/server/listen-port.txt`の実ポートを`codespace__open_temporary_public_deployment`でpublicにする。
-2. tokenなしの`https://<codespace-host>/admin/`が管理画面を返さないことを確認する。
-3. `session-token.txt`の内容を使って`/admin/login#<token>`へアクセスし、fragmentがHTTP URLへ送信されず、同一originの`POST /admin/session`成功後にCookie付き`/admin/`だけが表示されることを確認する。
-4. token/Cookieなしの`/admin/ws` Upgradeが拒否されることを確認する。
-5. 認証済み管理ページが実際のCodespaces originをサーバーへ通知し、`data/pairing/typed-voice-server.tvrkey`がそのhostの`wss://.../remote`で生成されることを確認する。
-6. Codespaces relayがbackendの`Origin`を`http://localhost:3000`へ書き換える場合でも、`X-Forwarded-Host`/`X-Forwarded-Proto`から復元したoriginが設定済みpublic originと厳密一致する場合だけAdmin/Worker sessionとWSSを受理することを確認する。別hostをforwardした要求は拒否する。
-7. 検証後は`codespace__close_temporary_public_deployment`で実ポートをprivateへ戻す。
+1. この項目はLinux Codex sandboxのnetwork namespace制約を確認した上で実施する。Windowsと同じoffline sandbox ingressが成立しない場合、HTTP workerをsandbox外へ移す・network権限を広げるなどの迂回はしない。
+2. 実施可能な環境ではAdmin、Trusted Worker、Remoteの各portを混同せず、必要なportだけを個別にpublicにする。
+3. tokenなしのAdmin originの`/admin/`が管理画面を返さないことを確認する。
+4. `session-token.txt`の内容を使ってAdmin originの`/admin/login#<token>`へアクセスし、fragmentがHTTP URLへ送信されず、同一originの`POST /admin/session`成功後にCookie付き`/admin/`だけが表示されることを確認する。
+5. token/Cookieなしの`/admin/ws` Upgradeが拒否されることを確認する。
+6. Worker originとRemote originがAdmin originとは別port・別公開URLであることを確認する。
+7. relayがbackendのHostを変更する場合でも、転送された公開originと設定済みrole originが厳密一致する場合だけAdmin/Worker sessionとWSSを受理することを確認する。
+8. 検証後は公開した各portをすべてprivateへ戻す。
 ## Cloudflare Quick Tunnel実経路
-1. 同じCodespaceで通常起動し、Node.jsが実ポートを確定後にcloudflaredを自動起動することを確認する。
-2. cloudflaredログから正規表現で抽出された`https://<random>.trycloudflare.com`と、そこから生成されたAdmin/Worker URLを確認する。
-3. 認証済み管理ページがtrycloudflare originを通知し、pairing fileのWSS URLが`wss://<random>.trycloudflare.com/remote`へ更新されることを確認する。
+1. Windows実機で通常起動し、3つのsandbox HTTP listenerがreadyになった後にAdmin、Trusted Worker、Remoteそれぞれのcloudflaredが別Codex online workspaceとして起動することを確認する。
+2. 3本のcloudflaredログから別々の`https://<random>.trycloudflare.com`が抽出され、Admin login URL、Worker login URL、Remote pairing endpointがそれぞれ対応するURLを使うことを確認する。
+3. pairing fileのWSS URLがRemote用Quick Tunnelの`wss://<remote-host>/remote`であり、Admin/Worker URLを誤って使わないことを確認する。
 4. `data/pairing/typed-voice-server.tvrkey`を`codespace__copy_from_codespace`でローカルへ取得できることを確認する。
 5. 実クライアントモードへそのファイルを投入し、AUTH、SERVER_CONFIG、PING/PONGまで通ることを確認する。
 ## Trusted Worker
@@ -69,7 +73,8 @@ Windows実機でChrome起動やプロセス管理を自動化せず、Node.jsサ
 5. UUID履歴へrequest/resultが記録され、管理画面は選択UUIDだけを取得・購読することを確認する。
 6. ready Workerを2台接続した状態でRemote TEXTを2件連続投入し、2台へ同時割当されることを確認する。それぞれのAUDIOで`Float32 byteLength == sampleCount * 4`を満たし、両要求が独立して完了することを確認する。
 ## 完了条件
-- Codespaces公開経路とtrycloudflare実経路の両方で同じNode.jsサーバーが動く。
+- Windowsでは親Node.jsにlistener/file-writeを戻さず、Admin・Worker・Remote・storageの用途別Codex sandbox境界を維持したままtrycloudflare実経路が動く。
+- Codespaces/LinuxでWindowsと同じloopback ingressが成立しない場合、その制約を明記し、sandboxを弱めた代替実装を完了扱いしない。
 - 管理セッショントークンなしでは管理HTMLと管理WSSへ到達できない。
 - Worker assetsとWorker WSSは10分接続tokenを持つ信頼済み参加者だけに開き、認証後の明示参加で暗号化セッションとPING死活監視が成立する。
 - 同一PCの複数WorkerはモデルdownloadだけをService Workerで束ね、各タブのmodel load/WebGPU推論は独立する。

@@ -1,53 +1,82 @@
 import { createHash, randomBytes } from "node:crypto";
-import { rm } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { BrowserWorkerPool } from "./server/engine-pool.mjs";
-import { HistoryStore } from "./server/history-store.mjs";
-import { OrchestratorHttpServer } from "./server/orchestrator-http.mjs";
-import { encodeEncryptedPairingText, writeEncryptedPairingFile, removeEncryptedPairingFile } from "./server/pairing-file.mjs";
+
 import { QuickTunnelProcess } from "./server/quick-tunnel.mjs";
-import { RemoteClientHub } from "./server/remote-hub.mjs";
-import { ServerSettingsStore } from "./server/settings-store.mjs";
-import { writePrivateFileAtomic } from "./server/private-file.mjs";
+import { SandboxWorkerClient } from "./server/sandbox-worker-client.mjs";
+import { restrictedNodeArgs } from "./server/node-permission.mjs";
 import {
   currentWorkerAccessToken,
   millisecondsUntilWorkerTokenRotation,
-  verifyWorkerAccessToken,
 } from "./server/worker-access-token.mjs";
 
+function assertSupportedNodeVersion() {
+  const [majorText, minorText] = String(process.versions.node ?? "").split(".");
+  const major = Number(majorText);
+  const minor = Number(minorText);
+  const supported = (major === 22 && Number.isSafeInteger(minor) && minor >= 13)
+    || major === 23
+    || major === 24;
+  if (!supported) throw new Error(`Node.js 22.13 through 24.x is required; current=${process.versions.node}`);
+}
+
+assertSupportedNodeVersion();
+
 const projectRoot = dirname(fileURLToPath(import.meta.url));
+const serverDirectory = join(projectRoot, "server");
+const workerDirectory = join(projectRoot, "worker");
+const adminDirectory = join(projectRoot, "admin");
 const webDirectory = join(projectRoot, "web");
 const engineDirectory = join(projectRoot, "engine");
-const historyDirectory = join(projectRoot, "data", "history");
-const settingsPath = join(projectRoot, "data", "settings.json");
-const adminSessionTokenPath = join(projectRoot, "data", "admin", "session-token.txt");
-const workerSessionTokenPath = join(projectRoot, "data", "worker", "session-token.txt");
-const workerResetTokenPath = join(projectRoot, "data", "worker", "reset-token.txt");
-const serverPortPath = join(projectRoot, "data", "server", "listen-port.txt");
-const pairingFilePath = join(projectRoot, "data", "pairing", "typed-voice-server.tvrkey");
+const engineSourceDirectory = join(projectRoot, "engine-source");
+const dataDirectory = join(projectRoot, "data");
+
+const storageWorkerPath = join(serverDirectory, "storage-worker.mjs");
+const adminWorkerPath = join(adminDirectory, "admin-http-worker.mjs");
+const trustedWorkerPath = join(workerDirectory, "trusted-worker-http-worker.mjs");
+const remoteWorkerPath = join(workerDirectory, "remote-http-worker.mjs");
 
 const parsed = parseArgs({
   args: process.argv.slice(2),
   options: {
     host: { type: "string", default: "127.0.0.1" },
     port: { type: "string", default: "0" },
+    "admin-port": { type: "string", default: "0" },
+    "remote-port": { type: "string", default: "0" },
     profile: { type: "string" },
     "public-origin": { type: "string" },
+    "worker-public-origin": { type: "string" },
+    "admin-public-origin": { type: "string" },
     "no-quick-tunnel": { type: "boolean", default: false },
     cloudflared: { type: "string" },
+    codex: { type: "string" },
   },
   strict: true,
   allowPositionals: false,
 });
 
-const host = String(parsed.values.host);
-const port = Number(parsed.values.port);
-if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new Error("--port must be 0..65535");
-let listenPort = null;
+const requestedHost = String(parsed.values.host).toLowerCase();
+if (!["127.0.0.1", "localhost", "::1"].includes(requestedHost)) {
+  throw new Error("--host is restricted to loopback; public listeners live inside Codex sandboxes");
+}
+
+function parsePort(value, label) {
+  const port = Number(value);
+  if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new Error(`${label} must be 0..65535`);
+  return port;
+}
+
+const requestedPorts = Object.freeze({
+  worker: parsePort(parsed.values.port, "--port"),
+  admin: parsePort(parsed.values["admin-port"], "--admin-port"),
+  remote: parsePort(parsed.values["remote-port"], "--remote-port"),
+});
+
 const requestedProfile = parsed.values.profile === undefined ? null : String(parsed.values.profile);
-if (requestedProfile !== null && !["fp32", "fp16", "mobile-int8", "mobile-int4"].includes(requestedProfile)) throw new Error("--profile is not supported");
+if (requestedProfile !== null && !["fp32", "fp16", "mobile-int8", "mobile-int4"].includes(requestedProfile)) {
+  throw new Error("--profile is not supported");
+}
 
 const ANSI = Object.freeze({
   reset: "\x1b[0m",
@@ -62,6 +91,22 @@ function consoleLine(color, label, value) {
   process.stdout.write(`${color}${label}${ANSI.reset} ${value}\n`);
 }
 
+function safeLogText(value, maxBytes = 16 * 1024) {
+  let text = String(value ?? "").replace(/\r\n?/gu, "\n");
+  text = text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, "?");
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length <= maxBytes) return text;
+  return `${bytes.subarray(0, maxBytes).toString("utf8")}…`;
+}
+
+function writeSandboxLog(label, value) {
+  const text = safeLogText(value);
+  const lines = text.split("\n");
+  for (const line of lines) {
+    if (line) process.stderr.write(`[${label}] ${line}\n`);
+  }
+}
+
 function terminalHyperlink(url, label = url) {
   const target = String(url);
   const text = String(label);
@@ -69,78 +114,61 @@ function terminalHyperlink(url, label = url) {
   return `\x1b]8;;${target}\x1b\\${text}\x1b]8;;\x1b\\`;
 }
 
-function browserOrigin() {
-  if (acceptedPublicOrigin) return `${acceptedPublicOrigin}/`;
-  const configured = parsed.values["public-origin"];
-  if (configured) {
-    const url = new URL(String(configured));
-    url.pathname = "/";
-    url.search = "";
-    url.hash = "";
-    return url.href;
-  }
-  if (!Number.isSafeInteger(listenPort) || listenPort < 1) return null;
-  const browserHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
-  const normalizedHost = browserHost.includes(":") && !browserHost.startsWith("[") ? `[${browserHost}]` : browserHost;
-  return `http://${normalizedHost}:${listenPort}/`;
+function sandboxFailure(name, error) {
+  writeSandboxLog(name, error instanceof Error ? error.stack ?? error.message : String(error));
+  if (!shuttingDown) void shutdown(1);
 }
 
-function loginUrl(pathname, token) {
-  const origin = browserOrigin();
-  if (!origin) return null;
-  const url = new URL(pathname, origin);
-  url.hash = String(token);
-  return url.href;
-}
-
-function printWorkerLoginUrl(token) {
-  const url = loginUrl("worker/login", token);
-  if (!url) return;
-  consoleLine(ANSI.cyan, "[worker login]", terminalHyperlink(url, url));
-}
-
-function printAdminLoginUrl() {
-  const url = loginUrl("admin/login", adminSessionToken);
-  if (!url) return;
-  consoleLine(ANSI.magenta, "[admin login]", terminalHyperlink(url, url));
-}
-
-function pairingChecksum(endpoint, authKey, encryptionKey) {
-  return createHash("sha256")
-    .update(Buffer.from("typed-voice-remote-qr/v1\n", "utf8"))
-    .update(Buffer.from(endpoint, "utf8"))
-    .update(Buffer.from([0]))
-    .update(authKey)
-    .update(encryptionKey)
-    .digest()
-    .subarray(0, 16);
-}
-
-function buildPairing(endpoint, authKey, encryptionKey) {
+function sandboxConfig(name, script, { read = [], write = [], denyRead = [], sandbox = "elevated", fullDiskRead = false } = {}) {
   return {
-    v: 1,
-    u: endpoint,
-    a: authKey.toString("base64url"),
-    e: encryptionKey.toString("base64url"),
-    c: pairingChecksum(endpoint, authKey, encryptionKey).toString("base64url"),
+    name,
+    command: process.execPath,
+    args: restrictedNodeArgs(script, { readRoots: read, writeRoots: write }),
+    cwd: dirname(script),
+    sandbox,
+    fullDiskRead,
+    codexExecutable: parsed.values.codex === undefined ? undefined : String(parsed.values.codex),
+    allowedDirectories: write,
+    sandboxReadOnlyDirectories: read,
+    sandboxDeniedDirectories: denyRead,
   };
 }
 
-async function writeSessionToken(path, token) {
-  return writePrivateFileAtomic(path, `${token}\n`, { encoding: "utf8" });
+function originCapability(role) {
+  return `tv-${role}-${randomBytes(24).toString("hex")}.invalid`;
 }
 
-async function writeRawSecretToken(path, token) {
-  return writePrivateFileAtomic(path, token, { encoding: "utf8" });
+function normalizeHttpsOrigin(value, label) {
+  const url = new URL(String(value));
+  if (url.protocol !== "https:") throw new Error(`${label} must use https`);
+  if (url.username || url.password) throw new Error(`${label} must not contain credentials`);
+  url.pathname = "/";
+  url.search = "";
+  url.hash = "";
+  return url.origin;
 }
 
-async function removeSessionToken(path) {
-  await rm(path, { force: true }).catch(() => {});
-  await rm(`${path}.tmp`, { force: true }).catch(() => {});
+const ports = { admin: null, worker: null, remote: null };
+const publicOrigins = { admin: null, worker: null, remote: null };
+const capabilityHosts = Object.freeze({
+  admin: originCapability("admin"),
+  worker: originCapability("worker"),
+  remote: originCapability("remote"),
+});
+
+function configuredPublicOrigin(role) {
+  if (role === "admin") return parsed.values["admin-public-origin"];
+  if (role === "worker") return parsed.values["worker-public-origin"];
+  if (role === "remote") return parsed.values["public-origin"];
+  throw new Error(`unsupported public role: ${role}`);
 }
 
-function createAdminSessionToken() {
-  return createHash("sha256").update(randomBytes(32)).digest("hex");
+function quickTunnelEnabledFor(role) {
+  return !parsed.values["no-quick-tunnel"] && configuredPublicOrigin(role) === undefined;
+}
+
+function listenerCapabilityHost(role) {
+  return quickTunnelEnabledFor(role) ? capabilityHosts[role] : null;
 }
 
 const state = {
@@ -159,68 +187,236 @@ const state = {
   clientBans: [],
 };
 
+let workerStatus = { engines: [], queued: 0, running: 0, profile: state.modelProfile };
 let pairingPayload = null;
 let pairingFileResolvedPath = null;
 let adminSessionTokenResolvedPath = null;
 let workerSessionTokenResolvedPath = null;
 let workerResetTokenResolvedPath = null;
+let workerPortResolvedPath = null;
+
+let storageWorker = null;
+let adminWorker = null;
+let trustedWorker = null;
+let remoteWorker = null;
+const tunnels = new Map();
+const historySubscriptions = new Map();
 let workerTokenTimer = null;
 let workerResetPromise = null;
-let settingsStore = null;
-let historyStore = null;
-let workerPool = null;
-let remoteHub = null;
-let httpServer = null;
-let quickTunnel = null;
 let shuttingDown = false;
-let acceptedPublicOrigin = null;
-const historySubscriptions = new Map();
+
 const authKey = randomBytes(32);
 const encryptionKey = randomBytes(32);
-const adminSessionToken = createAdminSessionToken();
+const adminSessionToken = randomBytes(32).toString("hex");
 const workerResetToken = randomBytes(64).toString("hex");
 let workerAccessSecret = randomBytes(64);
+let clientBanSalt = null;
+
+function sanitizeDataPath(value) {
+  const candidate = String(value ?? "");
+  if (!candidate || /[\u0000-\u001f\u007f]/u.test(candidate)) throw new Error("invalid storage path");
+  const windows = win32.isAbsolute(dataDirectory) || win32.isAbsolute(candidate);
+  const absolute = windows ? win32.isAbsolute(candidate) : isAbsolute(candidate);
+  if (!absolute) throw new Error("storage path must be absolute");
+  const rel = windows ? win32.relative(dataDirectory, candidate) : relative(dataDirectory, candidate);
+  const separator = windows ? win32.sep : sep;
+  if (rel === ".." || rel.startsWith(`..${separator}`) || (windows ? win32.isAbsolute(rel) : isAbsolute(rel))) {
+    throw new Error("storage path escapes data root");
+  }
+  return candidate;
+}
+
+function validConversationId(value) {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(String(value ?? ""));
+}
+
+function sanitizeClientBans(value) {
+  if (!Array.isArray(value) || value.length > 10000) throw new Error("invalid client ban list");
+  const result = [];
+  const seen = new Set();
+  for (const entry of value) {
+    const hash = String(entry ?? "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/u.test(hash)) throw new Error("invalid client ban hash");
+    if (!seen.has(hash)) {
+      seen.add(hash);
+      result.push(hash);
+    }
+  }
+  return result;
+}
+
+function sanitizeStoredSettings(value) {
+  if (!value || typeof value !== "object") throw new Error("invalid stored settings");
+  const modelProfile = String(value.modelProfile ?? "");
+  if (!["fp32", "fp16", "mobile-int8", "mobile-int4"].includes(modelProfile)) throw new Error("invalid stored model profile");
+  const clientBanSalt = String(value.clientBanSalt ?? "");
+  if (!/^[A-Za-z0-9_-]{43}$/u.test(clientBanSalt) || Buffer.from(clientBanSalt, "base64url").length !== 32) {
+    throw new Error("invalid client ban salt");
+  }
+  return { modelProfile, clientBanSalt, clientBans: sanitizeClientBans(value.clientBans) };
+}
+
+function expectedPairingChecksum(endpoint) {
+  return createHash("sha256")
+    .update(Buffer.from("typed-voice-remote-qr/v1\n", "utf8"))
+    .update(Buffer.from(endpoint, "utf8"))
+    .update(Buffer.from([0]))
+    .update(authKey)
+    .update(encryptionKey)
+    .digest()
+    .subarray(0, 16)
+    .toString("base64url");
+}
+
+function sanitizePairing(value, expectedEndpoint) {
+  if (!value || typeof value !== "object" || value.v !== 1) throw new Error("invalid pairing payload");
+  const endpoint = String(value.u ?? "");
+  if (endpoint !== expectedEndpoint) throw new Error("pairing endpoint mismatch");
+  const checksum = String(value.c ?? "");
+  if (checksum !== expectedPairingChecksum(endpoint)) throw new Error("pairing checksum mismatch");
+  const q = String(value.q ?? "");
+  if (!/^tvrkey1:[A-Za-z0-9_-]{32,4096}$/u.test(q)) throw new Error("invalid pairing QR payload");
+  return { v: 1, u: endpoint, c: checksum, q };
+}
+
+function sanitizeWorkerStatus(value) {
+  if (!value || typeof value !== "object" || !Array.isArray(value.engines) || value.engines.length > 64) {
+    throw new Error("invalid worker status");
+  }
+  const profile = String(value.profile ?? "");
+  if (!["fp32", "fp16", "mobile-int8", "mobile-int4"].includes(profile)) throw new Error("invalid worker status profile");
+  const running = Number(value.running ?? 0);
+  const queued = Number(value.queued ?? 0);
+  if (!Number.isSafeInteger(running) || running < 0 || running > 64) throw new Error("invalid running worker count");
+  if (!Number.isSafeInteger(queued) || queued < 0 || queued > 100000) throw new Error("invalid queued worker count");
+  const engines = value.engines.map((entry) => {
+    if (!entry || typeof entry !== "object") throw new Error("invalid worker status entry");
+    const index = Number(entry.index);
+    if (!Number.isSafeInteger(index) || index < 0 || index > 63) throw new Error("invalid worker index");
+    let info = null;
+    if (entry.info != null) {
+      if (typeof entry.info !== "object") throw new Error("invalid worker info");
+      const infoProfile = String(entry.info.profile ?? profile);
+      if (!["fp32", "fp16", "mobile-int8", "mobile-int4"].includes(infoProfile)) throw new Error("invalid worker info profile");
+      const sampleRate = entry.info.sampleRate == null ? null : Number(entry.info.sampleRate);
+      if (sampleRate !== null && (!Number.isSafeInteger(sampleRate) || sampleRate < 8000 || sampleRate > 192000)) throw new Error("invalid worker sample rate");
+      info = {
+        ready: Boolean(entry.info.ready),
+        profile: infoProfile,
+        backend: entry.info.backend == null ? null : String(entry.info.backend).slice(0, 128),
+        sampleRate,
+        error: entry.info.error == null ? null : String(entry.info.error).slice(0, 1024),
+      };
+    }
+    return {
+      index,
+      busy: Boolean(entry.busy),
+      connected: Boolean(entry.connected),
+      authenticated: Boolean(entry.authenticated),
+      info,
+      connectedAt: Number.isSafeInteger(Number(entry.connectedAt)) ? Number(entry.connectedAt) : null,
+      lastPongAt: entry.lastPongAt == null ? null : (Number.isSafeInteger(Number(entry.lastPongAt)) ? Number(entry.lastPongAt) : null),
+    };
+  });
+  return { engines, running, queued, profile };
+}
+
+function sanitizeRemoteStatus(value) {
+  if (!value || typeof value !== "object" || !Array.isArray(value.sessions) || value.sessions.length > 256) {
+    throw new Error("invalid remote status");
+  }
+  const authenticatedClients = Number(value.authenticatedClients ?? 0);
+  if (!Number.isSafeInteger(authenticatedClients) || authenticatedClients < 0 || authenticatedClients > 256) throw new Error("invalid remote client count");
+  const sessions = value.sessions.map((entry) => {
+    if (!entry || typeof entry !== "object") throw new Error("invalid remote session");
+    const connectionId = String(entry.connectionId ?? "").toLowerCase();
+    if (!/^[0-9a-f]{16}$/u.test(connectionId)) throw new Error("invalid remote connection id");
+    const conversationId = entry.conversationId == null ? null : String(entry.conversationId);
+    if (conversationId !== null && !validConversationId(conversationId)) throw new Error("invalid remote conversation id");
+    const clientHash = String(entry.clientHash ?? "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/u.test(clientHash)) throw new Error("invalid remote client hash");
+    return {
+      connectionId,
+      conversationId,
+      connectedAt: Number.isSafeInteger(Number(entry.connectedAt)) ? Number(entry.connectedAt) : null,
+      lastSeenAt: Number.isSafeInteger(Number(entry.lastSeenAt)) ? Number(entry.lastSeenAt) : null,
+      requests: Math.max(0, Math.min(1000000, Number(entry.requests) || 0)),
+      pending: Math.max(0, Math.min(100000, Number(entry.pending) || 0)),
+      clientHash,
+    };
+  });
+  return { authenticatedClients, sessions };
+}
 
 function adminSnapshot() {
-  const poolStatus = workerPool?.status();
   return {
     ...state,
-    runningJobs: Number(poolStatus?.running || 0),
-    queuedJobs: Number(poolStatus?.queued || 0),
-    engineSlots: Array.isArray(poolStatus?.engines) ? poolStatus.engines : state.engineSlots,
+    runningJobs: Number(workerStatus.running || 0),
+    queuedJobs: Number(workerStatus.queued || 0),
+    engineSlots: Array.isArray(workerStatus.engines) ? workerStatus.engines : state.engineSlots,
   };
+}
+
+function localOrigin(role) {
+  const port = ports[role];
+  return Number.isSafeInteger(port) && port > 0 ? `http://127.0.0.1:${port}` : null;
+}
+
+function browserOrigin(role) {
+  return publicOrigins[role] ?? localOrigin(role);
+}
+
+function loginUrl(role, pathname, token) {
+  const origin = browserOrigin(role);
+  if (!origin) return null;
+  const url = new URL(pathname, `${origin}/`);
+  url.hash = String(token);
+  return url.href;
+}
+
+function printAdminLoginUrl() {
+  const url = loginUrl("admin", "admin/login", adminSessionToken);
+  if (url) consoleLine(ANSI.magenta, "[admin login]", terminalHyperlink(url, url));
+}
+
+function printWorkerLoginUrl(token) {
+  const url = loginUrl("worker", "worker/login", token);
+  if (url) consoleLine(ANSI.cyan, "[worker login]", terminalHyperlink(url, url));
+}
+
+function pushAdminState() {
+  if (!adminWorker || shuttingDown) return;
+  void adminWorker.request("set-state", { state: adminSnapshot() }).catch((error) => sandboxFailure("admin-stdio", error));
 }
 
 function updateState(partial) {
   Object.assign(state, partial);
-  httpServer?.broadcastState();
+  pushAdminState();
 }
 
-function recordHistory(entry) {
-  void persistHistoryEvent(entry).catch((error) => {
-    process.stderr.write(`[history] ${error instanceof Error ? error.message : String(error)}\n`);
-  });
+function recomputeOverall() {
+  const workers = Array.isArray(workerStatus.engines) ? workerStatus.engines : [];
+  const hasReadyWorker = workers.some((worker) => worker?.connected && worker?.info?.ready);
+  if (!hasReadyWorker) updateState({ overall: "Worker待機中" });
+  else if (!state.pairingReady) updateState({ overall: "公開URL待機中" });
+  else updateState({ overall: "接続できます" });
 }
 
 function scheduleWorkerTokenRefresh(delayMs) {
   clearTimeout(workerTokenTimer);
   workerTokenTimer = setTimeout(() => {
-    void refreshWorkerSessionToken().catch((error) => {
-      process.stderr.write(`[worker-token] ${error instanceof Error ? error.message : String(error)}\n`);
-      if (!shuttingDown) scheduleWorkerTokenRefresh(1000);
-    });
+    void refreshWorkerSessionToken().catch((error) => sandboxFailure("worker-token", error));
   }, delayMs);
   workerTokenTimer.unref?.();
 }
 
 async function refreshWorkerSessionToken() {
   const current = currentWorkerAccessToken(workerAccessSecret);
-  workerSessionTokenResolvedPath = await writeSessionToken(workerSessionTokenPath, current.token);
+  workerSessionTokenResolvedPath = sanitizeDataPath(await storageWorker.request("write-worker-token", { token: current.token }));
   consoleLine(ANSI.yellow, "[worker session token file]", workerSessionTokenResolvedPath);
   consoleLine(ANSI.dim, "[worker token expires]", new Date(current.expiresAt).toISOString());
   printWorkerLoginUrl(current.token);
-  if (shuttingDown) return;
-  scheduleWorkerTokenRefresh(millisecondsUntilWorkerTokenRotation() + 25);
+  if (!shuttingDown) scheduleWorkerTokenRefresh(millisecondsUntilWorkerTokenRotation() + 25);
 }
 
 async function resetWorkerAccess() {
@@ -228,130 +424,318 @@ async function resetWorkerAccess() {
   workerResetPromise = (async () => {
     const nextSecret = randomBytes(64);
     const current = currentWorkerAccessToken(nextSecret);
-    const resolvedPath = await writeSessionToken(workerSessionTokenPath, current.token);
+    const resolvedPath = sanitizeDataPath(await storageWorker.request("write-worker-token", { token: current.token }));
     workerAccessSecret = nextSecret;
     workerSessionTokenResolvedPath = resolvedPath;
     clearTimeout(workerTokenTimer);
     workerTokenTimer = null;
-    workerPool?.disconnectAll(1008);
     consoleLine(ANSI.yellow, "[worker access reset]", new Date().toISOString());
     consoleLine(ANSI.yellow, "[worker session token file]", workerSessionTokenResolvedPath);
     consoleLine(ANSI.dim, "[worker token expires]", new Date(current.expiresAt).toISOString());
     printWorkerLoginUrl(current.token);
     if (!shuttingDown) scheduleWorkerTokenRefresh(millisecondsUntilWorkerTokenRotation() + 25);
+    return { workerAccessSecret: nextSecret.toString("base64url") };
   })();
   try {
-    await workerResetPromise;
+    return await workerResetPromise;
   } finally {
     workerResetPromise = null;
   }
 }
 
-async function persistHistoryEvent(entry) {
-  if (!historyStore || !entry?.conversationId) return;
-  let event;
-  if (entry.phase === "request") {
-    event = await historyStore.recordRequest({
+async function persistHistory(entry) {
+  if (!entry?.conversationId) return;
+  const stored = await storageWorker.request("history-record", { entry });
+  if ((historySubscriptions.get(entry.conversationId) ?? 0) > 0 && adminWorker) {
+    await adminWorker.request("history-event", {
       conversationId: entry.conversationId,
-      requestId: entry.requestId,
-      text: entry.text,
-      at: entry.at,
+      event: stored.event,
+      metadata: stored.metadata,
     });
-  } else if (entry.phase === "result") {
-    event = await historyStore.recordResult({
-      conversationId: entry.conversationId,
-      requestId: entry.requestId,
-      ok: entry.ok,
-      cancelled: entry.cancelled,
-      error: entry.error,
-      durationMs: entry.durationMs,
-      at: entry.at,
-    });
-  } else {
-    return;
-  }
-  if ((historySubscriptions.get(entry.conversationId) ?? 0) > 0) {
-    httpServer?.sendHistoryEvent(entry.conversationId, event, historyStore.getMetadata(entry.conversationId));
   }
 }
 
 async function setServerModelProfile(modelProfile) {
   const normalized = String(modelProfile ?? "");
   if (!["fp32", "fp16", "mobile-int8", "mobile-int4"].includes(normalized)) throw new Error("unsupported model profile");
-  if (state.modelProfile === normalized) {
-    await settingsStore?.setModelProfile(normalized);
-    return;
+  if (state.modelProfile !== normalized) {
+    workerStatus = sanitizeWorkerStatus(await trustedWorker.request("set-profile", { modelProfile: normalized }));
+    await remoteWorker.request("set-model", { modelProfile: normalized });
   }
-  await workerPool.reconfigure(normalized);
-  remoteHub.setModelProfile(normalized);
-  await settingsStore?.setModelProfile(normalized);
-  updateState({ modelProfile: normalized, model: `選択: ${normalized}` });
+  await storageWorker.request("set-model", { modelProfile: normalized });
+  updateState({
+    modelProfile: normalized,
+    model: `選択: ${normalized}`,
+    runningJobs: Number(workerStatus.running || 0),
+    queuedJobs: Number(workerStatus.queued || 0),
+    engineSlots: Array.isArray(workerStatus.engines) ? workerStatus.engines : [],
+  });
 }
 
 async function setClientBan(clientHash, banned) {
-  const normalized = String(clientHash ?? "").toLowerCase();
-  await settingsStore.setClientBanned(normalized, Boolean(banned));
-  if (banned) remoteHub.disconnectClientHash(normalized);
-  updateState({ clientBans: settingsStore.clientBans });
-  return { clientHash: normalized, banned: Boolean(banned) };
+  const result = await storageWorker.request("set-client-ban", { clientHash, banned: Boolean(banned) });
+  const resultHash = String(result?.clientHash ?? "").toLowerCase();
+  if (!/^[0-9a-f]{64}$/u.test(resultHash) || resultHash !== String(clientHash ?? "").toLowerCase()) throw new Error("storage client ban response mismatch");
+  state.clientBans = sanitizeClientBans(result.clientBans);
+  await remoteWorker.request("set-client-bans", { clientBans: state.clientBans });
+  updateState({ clientBans: state.clientBans });
+  return { clientHash: resultHash, banned: Boolean(result.banned) };
 }
 
-async function setPublicOrigin(value) {
-  const url = new URL(String(value));
-  if (url.protocol !== "https:") throw new Error("public origin must use https");
-  if (url.username || url.password) throw new Error("public origin must not contain credentials");
-  url.pathname = "/";
-  url.search = "";
-  url.hash = "";
-  acceptedPublicOrigin = url.origin;
-  const publicUrl = new URL("remote", url);
-  publicUrl.protocol = "wss:";
-  if (pairingPayload?.u === publicUrl.href) return pairingPayload;
-  const pairing = buildPairing(publicUrl.href, authKey, encryptionKey);
-  const pairingQr = encodeEncryptedPairingText(pairing, randomBytes(12));
-  const resolvedPairingFilePath = await writeEncryptedPairingFile(pairingFilePath, pairing, { randomBytes });
-  pairingPayload = { ...pairing, q: pairingQr };
-  pairingFileResolvedPath = resolvedPairingFilePath;
-  updateState({
-    overall: workerPool.status().engines.some((worker) => worker.info?.ready) ? "接続できます" : "Worker待機中",
-    tunnel: `公開: ${url.hostname}`,
-    pairingEndpoint: publicUrl.hostname,
-    pairingReady: true,
+async function setRolePublicOrigin(role, value) {
+  const origin = normalizeHttpsOrigin(value, `${role} public origin`);
+  publicOrigins[role] = origin;
+  if (role === "admin") {
+    await adminWorker.request("set-public-origin", { origin });
+    printAdminLoginUrl();
+  } else if (role === "worker") {
+    await trustedWorker.request("set-public-origin", { origin });
+    printWorkerLoginUrl(currentWorkerAccessToken(workerAccessSecret).token);
+  } else if (role === "remote") {
+    const publicUrl = new URL("remote", `${origin}/`);
+    publicUrl.protocol = "wss:";
+    const stored = await storageWorker.request("write-pairing", {
+      endpoint: publicUrl.href,
+      authKey: authKey.toString("base64url"),
+      encryptionKey: encryptionKey.toString("base64url"),
+    });
+    pairingPayload = sanitizePairing(stored.pairing, publicUrl.href);
+    pairingFileResolvedPath = sanitizeDataPath(stored.path);
+    updateState({
+      pairingReady: true,
+      pairingEndpoint: publicUrl.hostname,
+    });
+    if (adminWorker) await adminWorker.request("set-pairing", { pairing: pairingPayload });
+    consoleLine(ANSI.yellow, "[public WSS]", publicUrl.href);
+    consoleLine(ANSI.green, "[pairing file]", pairingFileResolvedPath);
+  }
+  const readyOrigins = Object.entries(publicOrigins)
+    .filter(([, item]) => item)
+    .map(([name, item]) => `${name}=${new URL(item).hostname}`)
+    .join(" ");
+  updateState({ tunnel: readyOrigins ? `公開: ${readyOrigins}` : "公開URL待機中" });
+  recomputeOverall();
+  return origin;
+}
+
+async function startTunnel(role) {
+  const origin = localOrigin(role);
+  if (!origin) throw new Error(`${role} listener is not ready`);
+  const tunnel = new QuickTunnelProcess({
+    localOrigin: origin,
+    originHostHeader: listenerCapabilityHost(role),
+    executable: parsed.values.cloudflared === undefined ? undefined : String(parsed.values.cloudflared),
+    onLog({ stream, text }) {
+      writeSandboxLog(`cloudflared:${role}:${stream}`, text);
+    },
   });
-  httpServer?.broadcastPairing();
-  consoleLine(ANSI.yellow, "[public WSS]", publicUrl.href);
-  consoleLine(ANSI.green, "[pairing file]", pairingFileResolvedPath);
-  printAdminLoginUrl();
-  printWorkerLoginUrl(currentWorkerAccessToken(workerAccessSecret).token);
-  return pairingPayload;
+  tunnels.set(role, tunnel);
+  const publicOrigin = await tunnel.start();
+  consoleLine(ANSI.cyan, `[quick tunnel ${role}]`, publicOrigin);
+  return setRolePublicOrigin(role, publicOrigin);
+}
+
+async function startStorageWorker() {
+  storageWorker = new SandboxWorkerClient(sandboxConfig("storage-worker", storageWorkerPath, {
+    read: [serverDirectory],
+    write: [dataDirectory],
+    sandbox: "unelevated",
+    fullDiskRead: true,
+  }), {
+    onStderr: (chunk) => writeSandboxLog("storage", chunk),
+    onExit: (code, signal) => sandboxFailure("storage", new Error(`exited (${signal ?? code ?? "unknown"})`)),
+    onFailure: (error) => sandboxFailure("storage", error),
+  });
+  await storageWorker.start();
+  await storageWorker.request("remove-runtime-files");
+  const stored = sanitizeStoredSettings(await storageWorker.request("open"));
+  clientBanSalt = stored.clientBanSalt;
+  state.modelProfile = requestedProfile ?? stored.modelProfile;
+  state.clientBans = stored.clientBans;
+  if (requestedProfile) await storageWorker.request("set-model", { modelProfile: requestedProfile });
+  adminSessionTokenResolvedPath = sanitizeDataPath(await storageWorker.request("write-admin-token", { token: adminSessionToken }));
+  workerResetTokenResolvedPath = sanitizeDataPath(await storageWorker.request("write-worker-reset-token", { token: workerResetToken }));
+  await refreshWorkerSessionToken();
+}
+
+async function startTrustedWorker() {
+  trustedWorker = new SandboxWorkerClient(sandboxConfig("trusted-worker-http", trustedWorkerPath, {
+    read: [workerDirectory, serverDirectory, engineDirectory, engineSourceDirectory],
+    denyRead: [dataDirectory],
+  }), {
+    onRequest(method) {
+      if (method === "worker-reset") return resetWorkerAccess();
+      throw new Error(`unsupported trusted-worker parent request: ${method}`);
+    },
+    onEvent(type, payload) {
+      if (type === "worker-state") {
+        workerStatus = sanitizeWorkerStatus(payload?.status);
+        const ready = workerStatus.engines.filter((worker) => worker.authenticated && worker.connected && worker.info?.ready).length;
+        updateState({
+          engine: workerStatus.engines.length ? `Trusted Worker ${ready}/${workerStatus.engines.length} 準備済み` : "Trusted Worker待機中",
+          model: `選択: ${workerStatus.profile}`,
+          runningJobs: Number(workerStatus.running || 0),
+          queuedJobs: Number(workerStatus.queued || 0),
+          engineSlots: workerStatus.engines,
+        });
+        remoteWorker?.event("worker-status", { status: workerStatus });
+        recomputeOverall();
+        return;
+      }
+      if (["synth-start", "synth-chunk", "synth-end", "synth-error"].includes(type)) {
+        remoteWorker?.event(type, payload);
+        return;
+      }
+      if (type === "diagnostic") writeSandboxLog("worker-http", payload?.message);
+    },
+    onStderr: (chunk) => writeSandboxLog("worker-http", chunk),
+    onExit: (code, signal) => sandboxFailure("worker-http", new Error(`exited (${signal ?? code ?? "unknown"})`)),
+    onFailure: (error) => sandboxFailure("worker-http", error),
+  });
+  await trustedWorker.start();
+  const started = await trustedWorker.request("start", {
+    port: requestedPorts.worker,
+    originCapabilityHost: listenerCapabilityHost("worker"),
+    modelProfile: state.modelProfile,
+    workerAccessSecret: workerAccessSecret.toString("base64url"),
+    workerResetToken,
+  });
+  ports.worker = Number(started?.address?.port);
+  workerStatus = sanitizeWorkerStatus(started?.status);
+  workerPortResolvedPath = sanitizeDataPath(await storageWorker.request("write-worker-port", { port: ports.worker }));
+}
+
+async function startRemoteWorker() {
+  remoteWorker = new SandboxWorkerClient(sandboxConfig("remote-http", remoteWorkerPath, {
+    read: [workerDirectory, serverDirectory],
+    denyRead: [dataDirectory],
+  }), {
+    onEvent(type, payload) {
+      if (type === "synth-request") {
+        trustedWorker.event("synthesize", payload);
+        return;
+      }
+      if (type === "synth-cancel") {
+        trustedWorker.event("cancel", payload);
+        return;
+      }
+      if (type === "remote-status") {
+        const status = sanitizeRemoteStatus(payload?.status);
+        updateState({
+          clients: status.authenticatedClients,
+          sessions: status.sessions,
+        });
+        return;
+      }
+      if (type === "history") {
+        void persistHistory(payload?.entry).catch((error) => writeSandboxLog("history", error?.message ?? error));
+      }
+    },
+    onStderr: (chunk) => writeSandboxLog("remote-http", chunk),
+    onExit: (code, signal) => sandboxFailure("remote-http", new Error(`exited (${signal ?? code ?? "unknown"})`)),
+    onFailure: (error) => sandboxFailure("remote-http", error),
+  });
+  await remoteWorker.start();
+  const address = await remoteWorker.request("start", {
+    port: requestedPorts.remote,
+    originCapabilityHost: listenerCapabilityHost("remote"),
+    authKey: authKey.toString("base64url"),
+    encryptionKey: encryptionKey.toString("base64url"),
+    clientBanSalt,
+    clientBans: state.clientBans,
+    modelProfile: state.modelProfile,
+    workerStatus,
+  });
+  ports.remote = Number(address?.port);
+  remoteWorker.event("worker-status", { status: workerStatus });
+}
+
+async function startAdminWorker() {
+  adminWorker = new SandboxWorkerClient(sandboxConfig("admin-http", adminWorkerPath, {
+    read: [adminDirectory, serverDirectory, workerDirectory, webDirectory],
+    denyRead: [dataDirectory],
+  }), {
+    onRequest(method, params) {
+      if (method === "history-get") return storageWorker.request("history-get", params);
+      if (method === "model-set") return setServerModelProfile(params?.modelProfile);
+      if (method === "client-ban-set") return setClientBan(params?.clientHash, params?.banned);
+      throw new Error(`unsupported admin parent request: ${method}`);
+    },
+    onEvent(type, payload) {
+      if (type === "disconnect") {
+        const connectionId = String(payload?.connectionId ?? "").toLowerCase();
+        if (!/^[0-9a-f]{16}$/u.test(connectionId)) return;
+        void remoteWorker.request("disconnect", { connectionId }).catch(() => {});
+        return;
+      }
+      if (type === "history-subscribe") {
+        const id = String(payload?.conversationId ?? "");
+        if (!validConversationId(id)) return;
+        historySubscriptions.set(id, (historySubscriptions.get(id) ?? 0) + 1);
+        return;
+      }
+      if (type === "history-unsubscribe") {
+        const id = String(payload?.conversationId ?? "");
+        if (!validConversationId(id)) return;
+        const next = (historySubscriptions.get(id) ?? 0) - 1;
+        if (next > 0) historySubscriptions.set(id, next);
+        else historySubscriptions.delete(id);
+        return;
+      }
+      if (type === "diagnostic") writeSandboxLog("admin-http", payload?.message);
+    },
+    onStderr: (chunk) => writeSandboxLog("admin-http", chunk),
+    onExit: (code, signal) => sandboxFailure("admin-http", new Error(`exited (${signal ?? code ?? "unknown"})`)),
+    onFailure: (error) => sandboxFailure("admin-http", error),
+  });
+  await adminWorker.start();
+  const address = await adminWorker.request("start", {
+    port: requestedPorts.admin,
+    originCapabilityHost: listenerCapabilityHost("admin"),
+    sessionToken: adminSessionToken,
+    state: adminSnapshot(),
+    pairing: pairingPayload,
+  });
+  ports.admin = Number(address?.port);
+}
+
+async function assertPublicWorkerIsolation() {
+  const roles = [
+    ["admin", adminWorker],
+    ["worker", trustedWorker],
+    ["remote", remoteWorker],
+  ];
+  for (const [sourceRole, client] of roles) {
+    for (const [targetRole] of roles) {
+      if (sourceRole === targetRole) continue;
+      await client.request("assert-loopback-denied", { port: ports[targetRole] });
+    }
+  }
+  consoleLine(ANSI.green, "[sandbox boundary]", "public HTTP workers cannot connect to sibling loopback ports");
 }
 
 async function shutdown(exitCode = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
-  updateState({ overall: "停止中" });
-  await quickTunnel?.stop().catch(() => {});
-  quickTunnel = null;
-  await remoteHub?.close().catch(() => {});
-  remoteHub = null;
-  await workerPool?.close().catch(() => {});
-  workerPool = null;
-  await httpServer?.close().catch(() => {});
-  httpServer = null;
-  await historyStore?.flush().catch(() => {});
-  historyStore = null;
-  historySubscriptions.clear();
-  await removeEncryptedPairingFile(pairingFilePath);
-  pairingFileResolvedPath = null;
-  await removeSessionToken(adminSessionTokenPath);
-  adminSessionTokenResolvedPath = null;
   clearTimeout(workerTokenTimer);
   workerTokenTimer = null;
-  await removeSessionToken(workerSessionTokenPath);
-  workerSessionTokenResolvedPath = null;
-  await removeSessionToken(workerResetTokenPath);
-  workerResetTokenResolvedPath = null;
-  await removeSessionToken(serverPortPath);
+  state.overall = "停止中";
+  for (const tunnel of tunnels.values()) await tunnel.stop().catch(() => {});
+  tunnels.clear();
+  await adminWorker?.request("close").catch(() => {});
+  await remoteWorker?.request("close").catch(() => {});
+  await trustedWorker?.request("close").catch(() => {});
+  await adminWorker?.close().catch(() => {});
+  await remoteWorker?.close().catch(() => {});
+  await trustedWorker?.close().catch(() => {});
+  adminWorker = null;
+  remoteWorker = null;
+  trustedWorker = null;
+  historySubscriptions.clear();
+  await storageWorker?.request("flush").catch(() => {});
+  await storageWorker?.request("remove-runtime-files").catch(() => {});
+  await storageWorker?.close().catch(() => {});
+  storageWorker = null;
   process.exitCode = exitCode;
 }
 
@@ -359,124 +743,44 @@ process.once("SIGINT", () => void shutdown(0));
 process.once("SIGTERM", () => void shutdown(0));
 
 try {
-  await removeEncryptedPairingFile(pairingFilePath);
-  await removeSessionToken(adminSessionTokenPath);
-  await removeSessionToken(workerSessionTokenPath);
-  await removeSessionToken(workerResetTokenPath);
-  await removeSessionToken(serverPortPath);
-  settingsStore = await new ServerSettingsStore(settingsPath).open();
-  state.modelProfile = requestedProfile ?? settingsStore.modelProfile;
-  state.clientBans = settingsStore.clientBans;
-  if (requestedProfile) await settingsStore.setModelProfile(requestedProfile);
-  historyStore = await new HistoryStore(historyDirectory).open();
-  adminSessionTokenResolvedPath = await writeSessionToken(adminSessionTokenPath, adminSessionToken);
-  workerResetTokenResolvedPath = await writeRawSecretToken(workerResetTokenPath, workerResetToken);
-  await refreshWorkerSessionToken();
+  await startStorageWorker();
+  await startTrustedWorker();
+  await startRemoteWorker();
+  await startAdminWorker();
+  await assertPublicWorkerIsolation();
 
-  workerPool = new BrowserWorkerPool({
-    profile: state.modelProfile,
-    onState(partial) {
-      updateState(partial);
-      remoteHub?.broadcastWorkerStatus();
-      const hasReadyWorker = workerPool.status().engines.some((worker) => worker.info?.ready);
-      if (hasReadyWorker && state.pairingReady) updateState({ overall: "接続できます" });
-      else if (hasReadyWorker) updateState({ overall: "公開URL待機中" });
-      else updateState({ overall: "Worker待機中" });
-    },
-    onDiagnostic({ index, message }) {
-      process.stderr.write(`[worker:${index}] ${String(message).replace(/[\r\n]+/g, " ")}\n`);
-    },
+  updateState({
+    overall: "Worker待機中",
+    engine: "Worker待機中",
+    model: `選択: ${state.modelProfile}`,
   });
 
-  remoteHub = new RemoteClientHub({
-    pool: workerPool,
-    authKey,
-    encryptionKey,
-    modelProfile: state.modelProfile,
-    clientBanSalt: Buffer.from(settingsStore.clientBanSalt, "base64url"),
-    isClientBanned(clientHash) {
-      return settingsStore.isClientBanned(clientHash);
-    },
-    onStatus(status) {
-      updateState({
-        clients: Number(status.authenticatedClients || 0),
-        sessions: Array.isArray(status.sessions) ? status.sessions : [],
-      });
-    },
-    onHistory: recordHistory,
-  });
-
-  httpServer = new OrchestratorHttpServer({
-    host,
-    port,
-    sessionToken: adminSessionToken,
-    webRoot: webDirectory,
-    engineRoot: engineDirectory,
-    workerPool,
-    remoteHub,
-    stateProvider: adminSnapshot,
-    pairingProvider: () => pairingPayload,
-    onDisconnect(connectionId) {
-      remoteHub.disconnect(connectionId);
-    },
-    onHistoryGet(conversationId) {
-      return historyStore.getContent(conversationId, { limit: 5000 });
-    },
-    onHistorySubscribe(conversationId) {
-      historySubscriptions.set(conversationId, (historySubscriptions.get(conversationId) ?? 0) + 1);
-    },
-    onHistoryUnsubscribe(conversationId) {
-      const next = (historySubscriptions.get(conversationId) ?? 0) - 1;
-      if (next > 0) historySubscriptions.set(conversationId, next);
-      else historySubscriptions.delete(conversationId);
-    },
-    onModelSet: setServerModelProfile,
-    onClientBanSet: setClientBan,
-    onPublicOrigin: setPublicOrigin,
-    onDiagnostic(message) {
-      process.stderr.write(`[http] ${String(message).replace(/[\r\n]+/g, " ")}\n`);
-    },
-    publicOriginProvider() {
-      return acceptedPublicOrigin;
-    },
-    workerResetToken,
-    onWorkerReset: resetWorkerAccess,
-    workerTokenValidator(token) {
-      return verifyWorkerAccessToken(workerAccessSecret, token);
-    },
-  });
-  const address = await httpServer.start();
-  listenPort = address.port;
-  const serverPortResolvedPath = await writeRawSecretToken(serverPortPath, String(address.port));
-  updateState({ overall: "Worker待機中", engine: "Worker待機中", model: `選択: ${state.modelProfile}` });
-
-  consoleLine(ANSI.green, "[server]", `${address.address}:${address.port}`);
-  consoleLine(ANSI.dim, "[listen port file]", serverPortResolvedPath);
-  consoleLine(ANSI.cyan, "[worker]", `/worker/`);
-  consoleLine(ANSI.magenta, "[remote]", `/remote`);
+  consoleLine(ANSI.green, "[worker listener]", `127.0.0.1:${ports.worker}`);
+  consoleLine(ANSI.green, "[remote listener]", `127.0.0.1:${ports.remote}`);
+  consoleLine(ANSI.green, "[admin listener]", `127.0.0.1:${ports.admin}`);
+  consoleLine(ANSI.dim, "[worker listen port file]", workerPortResolvedPath);
   consoleLine(ANSI.yellow, "[admin session token file]", adminSessionTokenResolvedPath);
   consoleLine(ANSI.yellow, "[worker reset token file]", workerResetTokenResolvedPath);
-  consoleLine(ANSI.dim, "[worker reset endpoint]", `POST http://127.0.0.1:${address.port}/worker/reset`);
+  consoleLine(ANSI.dim, "[worker reset endpoint]", `POST http://127.0.0.1:${ports.worker}/worker/reset`);
   printAdminLoginUrl();
   printWorkerLoginUrl(currentWorkerAccessToken(workerAccessSecret).token);
 
-  if (parsed.values["public-origin"]) {
-    await setPublicOrigin(parsed.values["public-origin"]);
-  } else if (!parsed.values["no-quick-tunnel"]) {
+  if (parsed.values["admin-public-origin"]) await setRolePublicOrigin("admin", parsed.values["admin-public-origin"]);
+  if (parsed.values["worker-public-origin"]) await setRolePublicOrigin("worker", parsed.values["worker-public-origin"]);
+  if (parsed.values["public-origin"]) await setRolePublicOrigin("remote", parsed.values["public-origin"]);
+
+  if (!parsed.values["no-quick-tunnel"]) {
     updateState({ tunnel: "Quick Tunnel起動中", overall: "公開URL待機中" });
-    quickTunnel = new QuickTunnelProcess({
-      localOrigin: `http://127.0.0.1:${address.port}`,
-      executable: parsed.values.cloudflared === undefined ? undefined : String(parsed.values.cloudflared),
-      onLog({ stream, text }) {
-        const normalized = String(text).replace(/\r\n/g, "\n");
-        process.stderr.write(`[cloudflared:${stream}] ${normalized}`);
-      },
-    });
-    const quickTunnelOrigin = await quickTunnel.start();
-    consoleLine(ANSI.cyan, "[quick tunnel]", quickTunnelOrigin);
-    await setPublicOrigin(quickTunnelOrigin);
+    if (!publicOrigins.worker) await startTunnel("worker");
+    if (!publicOrigins.remote) await startTunnel("remote");
+    if (!publicOrigins.admin) await startTunnel("admin");
   }
+
+  if (!publicOrigins.remote && parsed.values["no-quick-tunnel"]) {
+    updateState({ tunnel: "Quick Tunnel無効", pairingReady: false });
+  }
+  recomputeOverall();
 } catch (error) {
-  process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+  writeSandboxLog("startup", error instanceof Error ? error.stack ?? error.message : String(error));
   await shutdown(1);
 }

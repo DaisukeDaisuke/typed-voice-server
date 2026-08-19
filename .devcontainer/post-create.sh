@@ -78,4 +78,4 @@ node --test test/*.test.mjs
 printf '\n[typed-voice-server] Ready.\n'
 printf '  codex:       %s\n' "$(codex --version)"
 printf '  cloudflared: %s\n' "$(cloudflared --version)"
-printf '  server:      node server-main.mjs --host 0.0.0.0\n'
+printf '  server:      node server-main.mjs\n'

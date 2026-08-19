@@ -1,7 +1,7 @@
 # Installation
 ## Common requirements
-- Node.js 22 or newer.
-- Codex CLI 0.147.0 when Codex sandbox execution is used.
+- Node.js 22.13 through 24.x. The sandbox workers use the stable `--permission` flag and explicit per-role filesystem allowlists; Node 25+ changes Permission Model network semantics and is intentionally outside the supported range until that path is separately designed and validated.
+- Codex CLI 0.147.0 or the repository-pinned compatible version. HTTP/WSS and storage workers are always launched through Codex sandbox.
 - Run the server itself as a normal user. Do not run `server-main.mjs` as Administrator/root.
 ## Windows
 The native elevated Codex sandbox needs a one-time Administrator-approved provisioning step. The server does not perform this silently.

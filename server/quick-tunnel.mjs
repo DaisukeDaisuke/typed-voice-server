@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname, resolve, win32 } from "node:path";
 
 const TRY_CLOUDFLARE_URL_RE = /https:\/\/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.trycloudflare\.com\b/i;
@@ -39,6 +39,12 @@ function resolveCommand(name, { platform = process.platform, env = process.env, 
   throw new Error(`${value} executable was not found on PATH`);
 }
 
+function canonicalExecutable(path, label) {
+  const actual = realpathSync(String(path));
+  if (!statSync(actual).isFile()) throw new Error(`${label} must resolve to a regular file`);
+  return actual;
+}
+
 function spawnCodex(codex, args, { cwd, spawnFn = spawn, env = process.env } = {}) {
   if (!/\.(?:cmd|bat)$/i.test(codex)) {
     return spawnFn(codex, args, {
@@ -61,28 +67,29 @@ function spawnCodex(codex, args, { cwd, spawnFn = spawn, env = process.env } = {
   });
 }
 
-export function buildQuickTunnelSandboxArgs({ cloudflaredExecutable, localOrigin, cwd = process.cwd(), platform = process.platform }) {
+export function buildQuickTunnelSandboxArgs({ cloudflaredExecutable, localOrigin, originHostHeader = null, platform = process.platform }) {
   const pathDirname = platform === "win32" ? win32.dirname : dirname;
+  const sandboxCwd = pathDirname(cloudflaredExecutable);
   const filesystem = new Map([
-    [cwd, "read"],
-    [platform === "win32" ? win32.dirname(process.execPath) : dirname(process.execPath), "read"],
-    [pathDirname(cloudflaredExecutable), "read"],
+    [sandboxCwd, "read"],
   ]);
   const filesystemToml = [...filesystem].map(([path, permission]) => `${tomlPath(path)}='${permission}'`).join(",");
   const permissionProfile = `permissions.${ONLINE_WORKSPACE_PROFILE}={filesystem={':minimal'='read',${filesystemToml}},network={enabled=true}}`;
   const args = ["-c", permissionProfile];
+  args.push("-c", "shell_environment_policy={inherit='core',ignore_default_excludes=false,set={},experimental_use_profile=false}");
   if (platform === "win32") {
     args.push(
       "-c", "windows.sandbox='elevated'",
-      "-c", "shell_environment_policy={inherit='all',ignore_default_excludes=true,exclude=[],set={},include_only=[],use_profile=false}",
     );
   }
   args.push(
     "sandbox", "--permission-profile", ONLINE_WORKSPACE_PROFILE,
-    "-C", cwd,
+    "-C", sandboxCwd,
     "--", cloudflaredExecutable,
-    "tunnel", "--url", localOrigin, "--no-autoupdate",
+    "tunnel", "--url", localOrigin,
   );
+  if (originHostHeader !== null) args.push("--http-host-header", String(originHostHeader));
+  args.push("--no-autoupdate");
   return args;
 }
 
@@ -91,26 +98,30 @@ export class QuickTunnelProcess {
     localOrigin,
     executable = process.platform === "win32" ? "cloudflared.exe" : "cloudflared",
     codexExecutable = process.platform === "win32" ? "codex.cmd" : "codex",
-    cwd = process.cwd(),
     spawnFn = spawn,
     spawnSyncFn = spawnSync,
+    canonicalExecutableFn = canonicalExecutable,
     platform = process.platform,
     env = process.env,
     startupTimeoutMs = 45_000,
+    originHostHeader = null,
     onLog = () => {},
   }) {
     const origin = new URL(String(localOrigin));
     if (origin.protocol !== "http:" && origin.protocol !== "https:") throw new Error("Quick Tunnel local origin must use http or https");
+    const hostname = origin.hostname.toLowerCase();
+    if (!["127.0.0.1", "localhost", "[::1]", "::1"].includes(hostname)) throw new Error("Quick Tunnel local origin must be loopback");
     if (!Number.isSafeInteger(startupTimeoutMs) || startupTimeoutMs < 1) throw new Error("startupTimeoutMs must be positive");
     this.localOrigin = origin.href.replace(/\/$/, "");
     this.executable = String(executable);
     this.codexExecutable = String(codexExecutable);
-    this.cwd = platform === "win32" ? win32.resolve(String(cwd)) : resolve(String(cwd));
     this.spawnFn = spawnFn;
     this.spawnSyncFn = spawnSyncFn;
+    this.canonicalExecutableFn = canonicalExecutableFn;
     this.platform = platform;
     this.env = env;
     this.startupTimeoutMs = startupTimeoutMs;
+    this.originHostHeader = originHostHeader == null ? null : String(originHostHeader);
     this.onLog = onLog;
     this.child = null;
     this.publicOrigin = null;
@@ -121,24 +132,24 @@ export class QuickTunnelProcess {
     if (this.publicOrigin) return this.publicOrigin;
     if (this.startPromise) return this.startPromise;
     this.startPromise = new Promise((resolvePromise, rejectPromise) => {
-      const cloudflaredExecutable = resolveCommand(this.executable, {
+      const cloudflaredExecutable = this.canonicalExecutableFn(resolveCommand(this.executable, {
         platform: this.platform,
         env: this.env,
         spawnSyncFn: this.spawnSyncFn,
-      });
-      const codexExecutable = resolveCommand(this.codexExecutable, {
+      }), "cloudflared executable");
+      const codexExecutable = this.canonicalExecutableFn(resolveCommand(this.codexExecutable, {
         platform: this.platform,
         env: this.env,
         spawnSyncFn: this.spawnSyncFn,
-      });
+      }), "codex executable");
       const args = buildQuickTunnelSandboxArgs({
         cloudflaredExecutable,
         localOrigin: this.localOrigin,
-        cwd: this.cwd,
+        originHostHeader: this.originHostHeader,
         platform: this.platform,
       });
       const child = spawnCodex(codexExecutable, args, {
-        cwd: this.cwd,
+        cwd: this.platform === "win32" ? win32.dirname(cloudflaredExecutable) : dirname(cloudflaredExecutable),
         spawnFn: this.spawnFn,
         env: this.env,
       });

@@ -160,7 +160,7 @@ function safeAssetPath(root, relativePath) {
 
 export class OrchestratorHttpServer {
   constructor({
-    host = "0.0.0.0",
+    host = "127.0.0.1",
     port = 3000,
     sessionToken,
     webRoot,
@@ -181,10 +181,20 @@ export class OrchestratorHttpServer {
     workerResetToken = null,
     onWorkerReset = async () => {},
     workerTokenValidator = () => false,
+    roles = ["admin", "worker", "remote"],
+    originCapabilityHost = null,
   }) {
-    if (!/^[0-9a-f]{64}$/.test(String(sessionToken ?? ""))) throw new Error("admin session token must be 64 lowercase hex characters");
+    const normalizedHost = String(host).toLowerCase();
+    if (!["127.0.0.1", "localhost", "::1"].includes(normalizedHost)) {
+      throw new Error("HTTP role listener host must be loopback");
+    }
+    this.roles = new Set(roles.map((value) => String(value)));
+    for (const role of this.roles) {
+      if (!new Set(["admin", "worker", "remote"]).has(role)) throw new Error(`unsupported HTTP role: ${role}`);
+    }
+    if (this.roles.has("admin") && !/^[0-9a-f]{64}$/.test(String(sessionToken ?? ""))) throw new Error("admin session token must be 64 lowercase hex characters");
     if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new Error("port must be 0..65535");
-    this.host = host;
+    this.host = normalizedHost;
     this.port = port;
     this.sessionToken = sessionToken;
     this.webRoot = webRoot;
@@ -208,6 +218,10 @@ export class OrchestratorHttpServer {
     }
     this.onWorkerReset = onWorkerReset;
     this.workerTokenValidator = workerTokenValidator;
+    this.originCapabilityHost = originCapabilityHost == null ? null : String(originCapabilityHost).toLowerCase();
+    if (this.originCapabilityHost && !/^[a-z0-9][a-z0-9.-]{0,252}[a-z0-9]$/u.test(this.originCapabilityHost)) {
+      throw new Error("origin capability host is invalid");
+    }
     this.workerSessions = new Set();
     this.server = null;
     this.adminClients = new Set();
@@ -215,11 +229,13 @@ export class OrchestratorHttpServer {
   }
 
   async start() {
-    this.adminAssets = {
-      html: await readFile(resolve(this.webRoot, "index.html")),
-      css: await readFile(resolve(this.webRoot, "server-ui.css")),
-      js: await readFile(resolve(this.webRoot, "server-ui.js")),
-    };
+    if (this.roles.has("admin")) {
+      this.adminAssets = {
+        html: await readFile(resolve(this.webRoot, "index.html")),
+        css: await readFile(resolve(this.webRoot, "server-ui.css")),
+        js: await readFile(resolve(this.webRoot, "server-ui.js")),
+      };
+    }
     const server = http.createServer((request, response) => {
       void this.#handleHttp(request, response).catch((error) => {
         response.writeHead(500, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
@@ -228,8 +244,12 @@ export class OrchestratorHttpServer {
     });
     server.on("upgrade", (request, socket, head) => {
       try {
+        if (!this.#originTransportAllowed(request)) {
+          socket.destroy();
+          return;
+        }
         const url = new URL(request.url, "http://localhost");
-        if (url.pathname === "/worker/ws") {
+        if (this.roles.has("worker") && url.pathname === "/worker/ws") {
           if (!this.#workerAuthorized(request) || !this.#originAllowed(request)) {
             socket.destroy();
             return;
@@ -237,11 +257,11 @@ export class OrchestratorHttpServer {
           this.workerPool.handleUpgrade(request, socket, head);
           return;
         }
-        if (url.pathname === "/remote") {
+        if (this.roles.has("remote") && url.pathname === "/remote") {
           this.remoteHub.handleUpgrade(request, socket, head);
           return;
         }
-        if (url.pathname === "/admin/ws") {
+        if (this.roles.has("admin") && url.pathname === "/admin/ws") {
           const origin = String(request.headers.origin ?? "");
           if (!this.#adminAuthorized(request) || !this.#originAllowed(request)) {
             socket.destroy();
@@ -280,17 +300,22 @@ export class OrchestratorHttpServer {
   }
 
   async #handleHttp(request, response) {
+    if (!this.#originTransportAllowed(request)) {
+      noAccess(response);
+      return;
+    }
     const url = new URL(request.url, "http://localhost");
     if (request.method === "GET" && url.pathname === "/health") {
       response.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
-      response.end(JSON.stringify({ ok: true, workers: this.workerPool.status().engines.length }));
+      const workerCount = this.roles.has("worker") ? Number(this.workerPool?.status?.().engines?.length ?? 0) : 0;
+      response.end(JSON.stringify({ ok: true, roles: [...this.roles], workers: workerCount }));
       return;
     }
     if (request.method === "GET" && url.pathname === "/") {
       request.socket.destroy();
       return;
     }
-    if (request.method === "GET" && url.pathname === "/admin/login") {
+    if (this.roles.has("admin") && request.method === "GET" && url.pathname === "/admin/login") {
       response.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
         "Content-Length": String(ADMIN_LOGIN_HTML.length),
@@ -302,7 +327,7 @@ export class OrchestratorHttpServer {
       response.end(ADMIN_LOGIN_HTML);
       return;
     }
-    if (request.method === "POST" && url.pathname === "/admin/session") {
+    if (this.roles.has("admin") && request.method === "POST" && url.pathname === "/admin/session") {
       if (!this.#originAllowed(request)) {
         noAccess(response);
         return;
@@ -321,7 +346,7 @@ export class OrchestratorHttpServer {
       response.end();
       return;
     }
-    if (request.method === "GET" && url.pathname === "/worker/login") {
+    if (this.roles.has("worker") && request.method === "GET" && url.pathname === "/worker/login") {
       response.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
         "Content-Length": String(WORKER_LOGIN_HTML.length),
@@ -333,7 +358,7 @@ export class OrchestratorHttpServer {
       response.end(WORKER_LOGIN_HTML);
       return;
     }
-    if (request.method === "POST" && url.pathname === "/worker/session") {
+    if (this.roles.has("worker") && request.method === "POST" && url.pathname === "/worker/session") {
       if (!this.#originAllowed(request)) {
         this.onDiagnostic(`worker session rejected: reason=origin supplied=${JSON.stringify(String(request.headers.origin ?? ""))} direct=${JSON.stringify(requestOrigin(request))} configured=${JSON.stringify(this.publicOriginProvider())}`);
         noAccess(response);
@@ -356,7 +381,7 @@ export class OrchestratorHttpServer {
       response.end();
       return;
     }
-    if (request.method === "POST" && url.pathname === "/worker/reset") {
+    if (this.roles.has("worker") && request.method === "POST" && url.pathname === "/worker/reset") {
       if (!isDirectLoopbackRequest(request)) {
         noAccess(response);
         return;
@@ -376,7 +401,7 @@ export class OrchestratorHttpServer {
       response.end();
       return;
     }
-    if (request.method === "GET" && (url.pathname === "/admin" || url.pathname === "/admin/")) {
+    if (this.roles.has("admin") && request.method === "GET" && (url.pathname === "/admin" || url.pathname === "/admin/")) {
       if (!this.#adminAuthorized(request)) {
         noAccess(response);
         return;
@@ -389,26 +414,26 @@ export class OrchestratorHttpServer {
       response.end(this.adminAssets.html);
       return;
     }
-    if (request.method === "GET" && url.pathname === "/admin/server-ui.css") {
+    if (this.roles.has("admin") && request.method === "GET" && url.pathname === "/admin/server-ui.css") {
       if (!this.#adminAuthorized(request)) return noAccess(response);
       response.writeHead(200, { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "no-store" });
       response.end(this.adminAssets.css);
       return;
     }
-    if (request.method === "GET" && url.pathname === "/admin/server-ui.js") {
+    if (this.roles.has("admin") && request.method === "GET" && url.pathname === "/admin/server-ui.js") {
       if (!this.#adminAuthorized(request)) return noAccess(response);
       response.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-store" });
       response.end(this.adminAssets.js);
       return;
     }
-    if (request.method === "GET" && (url.pathname === "/worker" || url.pathname === "/worker/")) {
+    if (this.roles.has("worker") && request.method === "GET" && (url.pathname === "/worker" || url.pathname === "/worker/")) {
       // Worker本体へ入る前に認証を確定する。未認証・失効済み・破損Cookieなら
       // engine HTML（チュートリアルを含む）を一切返さず、ログインページへ戻す。
       if (!this.#workerAuthorized(request)) return redirectWorkerLogin(request, response);
       await this.#serveEngineAsset("server-engine.html", response, false);
       return;
     }
-    if (request.method === "GET" && url.pathname.startsWith("/worker/")) {
+    if (this.roles.has("worker") && request.method === "GET" && url.pathname.startsWith("/worker/")) {
       if (!this.#workerAuthorized(request)) return noAccess(response);
       const relativePath = decodeURIComponent(url.pathname.slice("/worker/".length));
       const immutable = relativePath.startsWith("assets/");
@@ -467,6 +492,13 @@ export class OrchestratorHttpServer {
     } catch {
       return false;
     }
+  }
+
+  #originTransportAllowed(request) {
+    if (!this.originCapabilityHost) return true;
+    if (isDirectLoopbackRequest(request)) return true;
+    const host = String(request.headers.host ?? "").split(":", 1)[0].trim().toLowerCase();
+    return host === this.originCapabilityHost;
   }
 
   #attachAdmin(ws, origin) {
