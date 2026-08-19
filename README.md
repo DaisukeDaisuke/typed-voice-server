@@ -19,5 +19,5 @@ node server-main.mjs
 ## 詳細仕様
 セキュリティ境界、各sandbox workerの役割、認証、暗号化、Quick Tunnel、永続データの扱いなど、実装上の契約は [SPECIFICATION.md](SPECIFICATION.md) にまとめています。
 ## 商標
-QRコードは株式会社デンソーウェーブの登録商標です。
+QRコードは株式会社デンソーウェーブの登録商標です。<br>
 QR Code is a registered trademark of DENSO WAVE INCORPORATED in Japan and in other countries.
