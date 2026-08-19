@@ -5,6 +5,7 @@ ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 CODEX_VERSION="0.147.0"
 CLOUDFLARED_VERSION="2026.8.2"
+DENO_VERSION="2.9.5"
 
 printf '\n[typed-voice-server] Ensuring ripgrep is available...\n'
 if ! command -v rg >/dev/null 2>&1; then
@@ -15,6 +16,15 @@ rg --version | head -n 1
 
 printf '\n[typed-voice-server] Installing Codex CLI...\n'
 npm install -g "@openai/codex@${CODEX_VERSION}"
+
+printf '\n[typed-voice-server] Installing Deno...\n'
+if ! command -v unzip >/dev/null 2>&1 && ! command -v 7z >/dev/null 2>&1; then
+  sudo apt-get update
+  sudo apt-get install -y --no-install-recommends unzip
+fi
+curl -fsSL https://deno.land/install.sh \
+  | sudo DENO_INSTALL=/usr/local sh -s "v${DENO_VERSION}" --no-modify-path
+deno --version | head -n 1
 
 printf '\n[typed-voice-server] Verifying Codex Linux sandbox...\n'
 node scripts/codex-sandbox-check.mjs --non-interactive
@@ -77,5 +87,6 @@ node --test test/*.test.mjs
 
 printf '\n[typed-voice-server] Ready.\n'
 printf '  codex:       %s\n' "$(codex --version)"
+printf '  deno:        %s\n' "$(deno --version | head -n 1)"
 printf '  cloudflared: %s\n' "$(cloudflared --version)"
 printf '  server:      node server-main.mjs\n'
