@@ -7,18 +7,23 @@
 
 [typed-voice-server 最新版をダウンロード](https://github.com/DaisukeDaisuke/typed-voice-server/releases/download/typed-voice-server-latest/typed-voice-server.zip)
 
-<画像: ブラウザでtyped-voice-server.zipのダウンロードが完了した画面>
+
+<img width="313" height="99" alt="image" src="https://github.com/user-attachments/assets/a9e7efd9-8617-4589-8a52-ab14af09e5d5" />
+
+<img width="1153" height="339" alt="image" src="https://github.com/user-attachments/assets/56cd5b99-ec20-40b2-8590-5fa18390392d" />
+
 
 > [!NOTE]
 > このリンクは、typed-voice-serverの最新配布版を取得するための直リンクです。
 ## 2. ダウンロードしたZIPを展開する
 ダウンロードした`typed-voice-server.zip`をエクスプローラーで開き、右クリックして「すべて展開」を選びます。
 
-<画像: typed-voice-server.zipを右クリックして「すべて展開」を選んでいる画面>
+<img width="476" height="589" alt="image" src="https://github.com/user-attachments/assets/d5e830e0-a7b1-4059-8c52-705ceb07ce87" />
 
 展開先は、あとで見つけやすい場所を選んでください。展開が終わったら、`server-main.mjs`が入っている展開先フォルダーを開いておきます。
 
-<画像: 展開後のtyped-voice-serverフォルダーを開き、server-main.mjsが見えている画面>
+<img width="1143" height="444" alt="image" src="https://github.com/user-attachments/assets/a61f4915-4d43-4371-9edb-8a8bc4e4e42e" />
+
 
 > [!IMPORTANT]
 > 以降のサーバー起動は、ダウンロードしたZIPそのものではなく、必ず展開後のフォルダーで行います。
