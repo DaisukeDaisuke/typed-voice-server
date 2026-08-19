@@ -88,6 +88,12 @@ test("role listener implementation rejects non-loopback binds", async () => {
   assert.match(http, /host = "127\.0\.0\.1"/u);
 });
 
+test("trusted worker probes an allowed engine file instead of statting the engine directory", async () => {
+  const worker = await source("worker/trusted-worker-http-worker.mjs");
+  assert.match(worker, /existsSync\(join\(builtEngineRoot, "index\.html"\)\)/u);
+  assert.doesNotMatch(worker, /existsSync\(builtEngineRoot\)/u);
+});
+
 test("storage worker exposes fixed operations instead of arbitrary path writes", async () => {
   const storage = await source("server/storage-worker.mjs");
   assert.match(storage, /const dataDirectory|data["'],\s*["']history/u);

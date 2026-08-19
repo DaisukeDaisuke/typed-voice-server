@@ -94,7 +94,7 @@ const peer = new StdioPeer(process.stdin, process.stdout, {
         port: Number(params?.port ?? 0),
         roles: ["worker"],
         originCapabilityHost: params?.originCapabilityHost,
-        engineRoot: existsSync(builtEngineRoot) ? builtEngineRoot : sourceEngineRoot,
+        engineRoot: existsSync(join(builtEngineRoot, "index.html")) ? builtEngineRoot : sourceEngineRoot,
         workerPool: pool,
         publicOriginProvider: () => publicOrigin,
         workerResetToken: params?.workerResetToken,
