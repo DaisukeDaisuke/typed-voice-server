@@ -1,7 +1,7 @@
 import { RemoteClientHub } from "../server/remote-hub.mjs";
 import { OrchestratorHttpServer } from "../server/orchestrator-http.mjs";
 import { createFdStdioPeer } from "../server/stdio-peer.mjs";
-import { assertLoopbackConnectDenied } from "../server/boundary-probe.mjs";
+import { assertSiblingRoleAuthenticationDenied } from "../server/boundary-probe.mjs";
 
 const MAX_AUDIO_BYTES = 256 * 1024 * 1024;
 const MAX_CHUNK_BYTES = 64 * 1024;
@@ -177,7 +177,7 @@ const peer = createFdStdioPeer({
       return server.start();
     }
     if (method === "set-model") return hub.setModelProfile(params?.modelProfile);
-    if (method === "assert-loopback-denied") return assertLoopbackConnectDenied(params?.port);
+    if (method === "assert-sibling-auth-denied") return assertSiblingRoleAuthenticationDenied(params?.port, params?.role);
     if (method === "set-client-bans") {
       clientBans.clear();
       for (const entry of params?.clientBans ?? []) {

@@ -1,7 +1,7 @@
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { acceptWebSocketUpgrade } from "../worker/websocket.mjs";
 
 const ADMIN_COOKIE = "typed_voice_admin_session";
@@ -173,6 +173,7 @@ export class OrchestratorHttpServer {
     host = "127.0.0.1",
     port = 3000,
     sessionToken,
+    sessionTokenHash = null,
     webRoot,
     engineRoot,
     workerPool,
@@ -203,11 +204,17 @@ export class OrchestratorHttpServer {
     for (const role of this.roles) {
       if (!new Set(["admin", "worker", "remote"]).has(role)) throw new Error(`unsupported HTTP role: ${role}`);
     }
-    if (this.roles.has("admin") && !/^[0-9a-f]{64}$/.test(String(sessionToken ?? ""))) throw new Error("admin session token must be 64 lowercase hex characters");
+    let resolvedSessionTokenHash = sessionTokenHash == null ? null : String(sessionTokenHash).toLowerCase();
+    if (resolvedSessionTokenHash === null && sessionToken != null) {
+      const rawSessionToken = String(sessionToken);
+      if (!/^[0-9a-f]{64}$/.test(rawSessionToken)) throw new Error("admin session token must be 64 lowercase hex characters");
+      resolvedSessionTokenHash = createHash("sha256").update(rawSessionToken, "ascii").digest("hex");
+    }
+    if (this.roles.has("admin") && !/^[0-9a-f]{64}$/.test(String(resolvedSessionTokenHash ?? ""))) throw new Error("admin session token hash must be 64 lowercase hex characters");
     if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new Error("port must be 0..65535");
     this.host = normalizedHost;
     this.port = port;
-    this.sessionToken = sessionToken;
+    this.sessionTokenHash = resolvedSessionTokenHash == null ? null : Buffer.from(resolvedSessionTokenHash, "hex");
     this.webRoot = webRoot;
     this.engineRoot = engineRoot;
     this.workerPool = workerPool;
@@ -351,12 +358,12 @@ export class OrchestratorHttpServer {
         return;
       }
       const supplied = await readBoundedTextBody(request, 128).catch(() => "");
-      if (!safeEqual(supplied, this.sessionToken)) {
+      if (!this.#adminTokenAuthorized(supplied)) {
         noAccess(response);
         return;
       }
       response.writeHead(204, {
-        "Set-Cookie": adminCookie(this.sessionToken, request),
+        "Set-Cookie": adminCookie(supplied, request),
         "Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",
@@ -481,7 +488,14 @@ export class OrchestratorHttpServer {
   }
 
   #adminAuthorized(request) {
-    return safeEqual(cookieValue(request, ADMIN_COOKIE), this.sessionToken);
+    return this.#adminTokenAuthorized(cookieValue(request, ADMIN_COOKIE));
+  }
+
+  #adminTokenAuthorized(value) {
+    const supplied = String(value ?? "");
+    if (!this.sessionTokenHash || !/^[0-9a-f]{64}$/.test(supplied)) return false;
+    const digest = createHash("sha256").update(supplied, "ascii").digest();
+    return timingSafeEqual(digest, this.sessionTokenHash);
   }
 
   #workerAuthorized(request) {

@@ -230,6 +230,7 @@ let serverReady = false;
 const authKey = randomBytes(32);
 const encryptionKey = randomBytes(32);
 const adminSessionToken = randomBytes(32).toString("hex");
+const adminSessionTokenHash = createHash("sha256").update(adminSessionToken, "ascii").digest("hex");
 const workerResetToken = randomBytes(64).toString("hex");
 let workerAccessSecret = randomBytes(64);
 let clientBanSalt = null;
@@ -736,7 +737,7 @@ async function startAdminWorker() {
   const address = await adminWorker.request("start", {
     port: requestedPorts.admin,
     originCapabilityHost: listenerCapabilityHost("admin"),
-    sessionToken: adminSessionToken,
+    sessionTokenHash: adminSessionTokenHash,
     state: adminSnapshot(),
     pairing: pairingPayload,
   });
@@ -744,10 +745,6 @@ async function startAdminWorker() {
 }
 
 async function assertPublicWorkerIsolation() {
-  if (linuxDirectTestBackend) {
-    writeSandboxLog("security", "Linux direct-test backend: sibling loopback isolation is not asserted; the outer container is the test boundary.");
-    return;
-  }
   const roles = [
     ["admin", adminWorker],
     ["worker", trustedWorker],
@@ -756,10 +753,10 @@ async function assertPublicWorkerIsolation() {
   for (const [sourceRole, client] of roles) {
     for (const [targetRole] of roles) {
       if (sourceRole === targetRole) continue;
-      await client.request("assert-loopback-denied", { port: ports[targetRole] });
+      await client.request("assert-sibling-auth-denied", { port: ports[targetRole], role: targetRole });
     }
   }
-  consoleLine(ANSI.green, "[sandbox boundary]", "public HTTP workers cannot connect to sibling loopback ports");
+  consoleLine(ANSI.green, "[sandbox boundary]", "public HTTP workers cannot authenticate to sibling roles");
 }
 
 async function shutdown(exitCode = 0) {
@@ -791,7 +788,7 @@ process.once("SIGINT", () => void shutdown(0));
 process.once("SIGTERM", () => void shutdown(0));
 
 if (linuxDirectTestBackend) {
-  writeSandboxLog("security", "Linux direct-test backend enabled: workers run directly inside the outer container; Windows Codex sandbox guarantees are not being tested.");
+  writeSandboxLog("security", "Linux direct-test backend enabled: workers run directly inside the outer container; OS sandbox guarantees are not being tested, but sibling application authentication probes still run.");
 }
 
 let startupStage = "storage worker";
@@ -803,7 +800,7 @@ try {
   await startRemoteWorker();
   startupStage = "admin worker";
   await startAdminWorker();
-  startupStage = "public worker isolation probe";
+  startupStage = "public worker capability probe";
   await assertPublicWorkerIsolation();
 
   updateState({
