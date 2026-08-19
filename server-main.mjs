@@ -48,6 +48,8 @@ const parsed = parseArgs({
     "public-origin": { type: "string" },
     "worker-public-origin": { type: "string" },
     "admin-public-origin": { type: "string" },
+    "open-worker": { type: "string" },
+    "open-admin": { type: "string" },
     "no-quick-tunnel": { type: "boolean", default: false },
     cloudflared: { type: "string" },
     codex: { type: "string" },
@@ -67,10 +69,24 @@ function parsePort(value, label) {
   return port;
 }
 
+function parseBooleanOption(value, label, defaultValue = false) {
+  if (value === undefined) return defaultValue;
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  throw new Error(`${label} must be true or false`);
+}
+
 const requestedPorts = Object.freeze({
   worker: parsePort(parsed.values.port, "--port"),
   admin: parsePort(parsed.values["admin-port"], "--admin-port"),
   remote: parsePort(parsed.values["remote-port"], "--remote-port"),
+});
+
+const requestedTunnelExposure = Object.freeze({
+  worker: parseBooleanOption(parsed.values["open-worker"], "--open-worker", false),
+  admin: parseBooleanOption(parsed.values["open-admin"], "--open-admin", false),
+  remote: true,
 });
 
 const requestedProfile = parsed.values.profile === undefined ? null : String(parsed.values.profile);
@@ -164,7 +180,9 @@ function configuredPublicOrigin(role) {
 }
 
 function quickTunnelEnabledFor(role) {
-  return !parsed.values["no-quick-tunnel"] && configuredPublicOrigin(role) === undefined;
+  return !parsed.values["no-quick-tunnel"]
+    && configuredPublicOrigin(role) === undefined
+    && Boolean(requestedTunnelExposure[role]);
 }
 
 function listenerCapabilityHost(role) {
@@ -376,12 +394,18 @@ function loginUrl(role, pathname, token) {
 
 function printAdminLoginUrl() {
   const url = loginUrl("admin", "admin/login", adminSessionToken);
-  if (url) consoleLine(ANSI.magenta, "[admin login]", terminalHyperlink(url, url));
+  if (!url) return;
+  const disabled = !publicOrigins.admin && !quickTunnelEnabledFor("admin") && configuredPublicOrigin("admin") === undefined;
+  const suffix = disabled ? ` ${ANSI.yellow}(tunnel disabled)${ANSI.reset}` : "";
+  consoleLine(ANSI.magenta, "[admin login]", `${ANSI.magenta}${terminalHyperlink(url, url)}${ANSI.reset}${suffix}`);
 }
 
 function printWorkerLoginUrl(token) {
   const url = loginUrl("worker", "worker/login", token);
-  if (url) consoleLine(ANSI.cyan, "[worker login]", terminalHyperlink(url, url));
+  if (!url) return;
+  const disabled = !publicOrigins.worker && !quickTunnelEnabledFor("worker") && configuredPublicOrigin("worker") === undefined;
+  const suffix = disabled ? ` ${ANSI.yellow}(tunnel disabled)${ANSI.reset}` : "";
+  consoleLine(ANSI.cyan, "[worker login]", `${ANSI.cyan}${terminalHyperlink(url, url)}${ANSI.reset}${suffix}`);
 }
 
 function pushAdminState() {
@@ -762,18 +786,19 @@ try {
   consoleLine(ANSI.yellow, "[admin session token file]", adminSessionTokenResolvedPath);
   consoleLine(ANSI.yellow, "[worker reset token file]", workerResetTokenResolvedPath);
   consoleLine(ANSI.dim, "[worker reset endpoint]", `POST http://127.0.0.1:${ports.worker}/worker/reset`);
-  printAdminLoginUrl();
-  printWorkerLoginUrl(currentWorkerAccessToken(workerAccessSecret).token);
+  if (!quickTunnelEnabledFor("admin") && configuredPublicOrigin("admin") === undefined) printAdminLoginUrl();
+  if (!quickTunnelEnabledFor("worker") && configuredPublicOrigin("worker") === undefined) {
+    printWorkerLoginUrl(currentWorkerAccessToken(workerAccessSecret).token);
+  }
 
   if (parsed.values["admin-public-origin"]) await setRolePublicOrigin("admin", parsed.values["admin-public-origin"]);
   if (parsed.values["worker-public-origin"]) await setRolePublicOrigin("worker", parsed.values["worker-public-origin"]);
   if (parsed.values["public-origin"]) await setRolePublicOrigin("remote", parsed.values["public-origin"]);
 
-  if (!parsed.values["no-quick-tunnel"]) {
+  const tunnelRoles = ["worker", "remote", "admin"].filter((role) => quickTunnelEnabledFor(role) && !publicOrigins[role]);
+  if (tunnelRoles.length > 0) {
     updateState({ tunnel: "Quick Tunnel起動中", overall: "公開URL待機中" });
-    if (!publicOrigins.worker) await startTunnel("worker");
-    if (!publicOrigins.remote) await startTunnel("remote");
-    if (!publicOrigins.admin) await startTunnel("admin");
+    for (const role of tunnelRoles) await startTunnel(role);
   }
 
   if (!publicOrigins.remote && parsed.values["no-quick-tunnel"]) {

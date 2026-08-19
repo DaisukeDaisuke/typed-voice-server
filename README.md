@@ -5,7 +5,7 @@
 - `storage-worker.mjs`はHTTP workerとWindows sandbox identityを共有しないCodex unelevated restricted-token childとして動かし、`data/`だけにwrite capabilityを持たせます。<br>Codexのunelevated backendはrestricted read rootを表現できないためCodex層ではfull-disk read profileを使いますが、Node Permission Modelでstorage process自身のfilesystem accessを`server/`と`data/`へ再制限します。<br>公開HTTP 3 workerにはCodex層で`data/`を明示deny-readし、過去にrepo rootへsandbox read ACEが残っていても永続秘密へ到達できないようにします。<br>
 - 各Node sandbox workerはNode.js Permission Modelも有効にし、役割ごとのfilesystem allowlistだけを渡します。<br>`child_process`、native addon、Worker Threads、WASI、Inspectorを許可するフラグは渡さず、Codex Windows sandboxが公開HTTP worker間で共有sandbox accountを使うことによる追加経路を狭めます。<br>Node Permission Modelは悪意コード向けの正式sandboxではないため、公開HTTP workerの主境界はCodex elevated sandboxのnetwork/filesystem ACL、storageの主write境界はCodex unelevated restricted tokenのwrite capabilityです。<br>
 - Windows版Codexは公開HTTP workerごとに別OSユーザーを作らず、固定`CodexSandboxOffline`アカウントを共有します。<br>そのため本設計が直接保証するのは、公開HTTP worker内のJavaScript/Node実行が他loopback portへ接続できないこと、`data/`を読めないこと、Node Permission Modelで通常のprocess/addon拡張経路を持たないこと、親stdioが固定操作だけを受理することです。<br>Codex sandbox内で任意native code実行まで成立した後のWindows process-object間アクセスについて、stock Codexはsandbox invocationごとの独立OS identityを提供していません。そこまでを「別workerへ横移動不能」とするにはCodex側のper-invocation identity/AppContainer等の追加境界が必要であり、このリポジトリ側だけで完全隔離済みとは扱いません。<br>
-- 公開時は`admin`、`worker`、`remote`それぞれに別のQuick Tunnelを起動します。<br>cloudflaredはCodex online workspace、各HTTP workerはCodex offline sandboxなので、公開HTTP workerが侵害されてもCodexのWindows network境界を破らない限り別loopback portへoutbound接続できない構成です。<br>
+- 通常起動で自動公開するQuick Tunnelは`remote`だけです。<br>`admin`と`worker`はloopbackだけに残し、必要な場合だけ`--open-admin=true` / `--open-worker=true`を明示して、それぞれ別のQuick Tunnelを起動します。<br>cloudflaredはCodex online workspace、各HTTP workerはCodex offline sandboxなので、公開HTTP workerが侵害されてもCodexのWindows network境界を破らない限り別loopback portへoutbound接続できない構成です。<br>
 - 3つのHTTP workerがreadyになった直後、各worker自身から残り2つのloopback portへ接続を試す起動時境界probeを必ず実行します。<br>1本でも接続できた場合はQuick Tunnelを公開する前に起動失敗とし、Codex/Windows Firewall設定が想定より広い状態でfail-openしません。<br>
 - Node.jsサーバー自身はChromeを起動しません。<br>Chrome DevTools Protocol、Chrome PID追跡、Chrome用watchdog、WebMCPは使用しません。<br>
 - Worker browserは一般公開しません。<br>`/worker/login#<current-token>`で短寿命Worker接続トークンをCookieへ交換したブラウザだけが`/worker/`のHTML/JS/WASMと`/worker/ws`へ到達できます。<br>
@@ -36,7 +36,7 @@ Release artifactはビルド済みWorker browser assetsを`engine/`へ含みま�
 ```text
 node server-main.mjs
 ```
-通常起動ではsandbox内のAdmin、Trusted Worker、Remote listenerがそれぞれloopbackの実ポートを確定した後、各portに別の`cloudflared tunnel --url http://127.0.0.1:<実ポート>`をCodex online workspaceで起動します。<br>`--port`はTrusted Worker port、`--remote-port`はRemote port、`--admin-port`はAdmin portを固定する場合だけ指定します。<br>Quick Tunnelを起動しない場合は`--no-quick-tunnel`を指定します。<br>
+通常起動ではsandbox内のAdmin、Trusted Worker、Remote listenerがそれぞれloopbackの実ポートを確定した後、Remote portだけに`cloudflared tunnel --url http://127.0.0.1:<実ポート>`をCodex online workspaceで起動します。<br>Admin/Trusted Workerも外部公開する場合は`--open-admin=true` / `--open-worker=true`を明示します。指定しない場合のAdmin/Worker login URLは`http://127.0.0.1:<実ポート>/...#<token>`のOSC 8リンクとしてstdioへ出し、`(tunnel disabled)`を併記します。<br>`--port`はTrusted Worker port、`--remote-port`はRemote port、`--admin-port`はAdmin portを固定する場合だけ指定します。<br>すべてのQuick Tunnelを起動しない場合は`--no-quick-tunnel`を指定します。<br>
 ```text
 node server-main.mjs --no-quick-tunnel
 ```

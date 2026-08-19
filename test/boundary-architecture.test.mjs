@@ -34,6 +34,16 @@ test("Codex child profiles never enable broad local binding", async () => {
   assert.equal(files.some((text) => text.includes("allow_local_binding")), false);
 });
 
+test("Admin and Trusted Worker Quick Tunnels are explicit opt-in while Remote remains default", async () => {
+  const main = await source("server-main.mjs");
+  assert.match(main, /"open-worker": \{ type: "string" \}/u);
+  assert.match(main, /"open-admin": \{ type: "string" \}/u);
+  assert.match(main, /worker:\s*parseBooleanOption\(parsed\.values\["open-worker"\], "--open-worker", false\)/u);
+  assert.match(main, /admin:\s*parseBooleanOption\(parsed\.values\["open-admin"\], "--open-admin", false\)/u);
+  assert.match(main, /remote:\s*true/u);
+  assert.match(main, /\(tunnel disabled\)/u);
+});
+
 test("public workers deny-read data while storage uses the distinct unelevated identity", async () => {
   const main = await source("server-main.mjs");
   assert.match(main, /sandboxConfig\("storage-worker"[\s\S]*?sandbox:\s*"unelevated"/u);
