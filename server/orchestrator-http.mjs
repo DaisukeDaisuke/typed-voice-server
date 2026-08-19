@@ -24,24 +24,34 @@ if (!/^[0-9a-f]{64}$/.test(token)) {
     .catch((error) => { status.textContent = error.message; });
 }
 </script></body></html>`, "utf8");
-const WORKER_LOGIN_HTML = Buffer.from(`<!doctype html>
+function workerLoginHtml(workerPageUrl) {
+  const target = JSON.stringify(String(workerPageUrl ?? ""));
+  return Buffer.from(`<!doctype html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>typed-voice trusted worker login</title></head>
 <body><main><h1>typed-voice Trusted Worker</h1><p id="status">Worker接続トークンを確認しています。</p></main>
 <script>
 const status = document.getElementById("status");
 const token = location.hash.slice(1);
+const workerPageUrl = ${target};
+const server = location.origin;
 history.replaceState(null, "", location.pathname);
 if (!/^[0-9a-f]{128}$/.test(token)) {
   status.textContent = "有効なWorker接続トークンがありません。";
+} else if (!workerPageUrl) {
+  status.textContent = "Workerページが設定されていません。";
 } else {
   fetch("./session", { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "text/plain;charset=UTF-8" }, body: token })
     .then((response) => {
       if (!response.ok) throw new Error("Worker接続トークンを確認できませんでした。現在の10分トークンを使ってください。");
-      location.replace("./");
+      const destination = new URL(workerPageUrl);
+      destination.searchParams.set("server", server);
+      destination.hash = token;
+      location.replace(destination.href);
     })
     .catch((error) => { status.textContent = error.message; });
 }
 </script></body></html>`, "utf8");
+}
 const MIME_TYPES = Object.freeze({
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -181,6 +191,7 @@ export class OrchestratorHttpServer {
     workerResetToken = null,
     onWorkerReset = async () => {},
     workerTokenValidator = () => false,
+    workerPageUrl = null,
     roles = ["admin", "worker", "remote"],
     originCapabilityHost = null,
   }) {
@@ -218,6 +229,8 @@ export class OrchestratorHttpServer {
     }
     this.onWorkerReset = onWorkerReset;
     this.workerTokenValidator = workerTokenValidator;
+    this.workerPageUrl = workerPageUrl == null ? null : new URL(String(workerPageUrl)).href;
+    this.workerPageOrigin = this.workerPageUrl ? new URL(this.workerPageUrl).origin : null;
     this.originCapabilityHost = originCapabilityHost == null ? null : String(originCapabilityHost).toLowerCase();
     if (this.originCapabilityHost && !/^[a-z0-9][a-z0-9.-]{0,252}[a-z0-9]$/u.test(this.originCapabilityHost)) {
       throw new Error("origin capability host is invalid");
@@ -250,11 +263,16 @@ export class OrchestratorHttpServer {
         }
         const url = new URL(request.url, "http://localhost");
         if (this.roles.has("worker") && url.pathname === "/worker/ws") {
-          if (!this.#workerAuthorized(request) || !this.#originAllowed(request)) {
+          const cookieAuthorized = this.#workerAuthorized(request);
+          const workerPageOriginAllowed = this.#workerPageOriginAllowed(request);
+          if ((!cookieAuthorized && !workerPageOriginAllowed)
+            || (!this.#originAllowed(request) && !workerPageOriginAllowed)) {
             socket.destroy();
             return;
           }
-          this.workerPool.handleUpgrade(request, socket, head);
+          this.workerPool.handleUpgrade(request, socket, head, {
+            accessTokenValidator: cookieAuthorized ? null : this.workerTokenValidator,
+          });
           return;
         }
         if (this.roles.has("remote") && url.pathname === "/remote") {
@@ -347,15 +365,16 @@ export class OrchestratorHttpServer {
       return;
     }
     if (this.roles.has("worker") && request.method === "GET" && url.pathname === "/worker/login") {
+      const body = workerLoginHtml(this.workerPageUrl);
       response.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
-        "Content-Length": String(WORKER_LOGIN_HTML.length),
+        "Content-Length": String(body.length),
         "Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer",
         "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
         "X-Content-Type-Options": "nosniff",
       });
-      response.end(WORKER_LOGIN_HTML);
+      response.end(body);
       return;
     }
     if (this.roles.has("worker") && request.method === "POST" && url.pathname === "/worker/session") {
@@ -468,6 +487,11 @@ export class OrchestratorHttpServer {
   #workerAuthorized(request) {
     const session = cookieValue(request, WORKER_COOKIE);
     return typeof session === "string" && this.workerSessions.has(session);
+  }
+
+  #workerPageOriginAllowed(request) {
+    return Boolean(this.workerPageOrigin)
+      && String(request.headers.origin ?? "") === this.workerPageOrigin;
   }
 
   #originAllowed(request) {

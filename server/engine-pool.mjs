@@ -172,14 +172,17 @@ export class BrowserWorkerPool {
     this.closed = false;
   }
 
-  handleUpgrade(request, socket, head) {
+  handleUpgrade(request, socket, head, { accessTokenValidator = null } = {}) {
     if (this.closed) throw new Error("worker pool is closed");
     if (this.workers.size >= MAX_WORKERS) throw new Error("worker limit reached");
+    if (accessTokenValidator !== null && typeof accessTokenValidator !== "function") {
+      throw new Error("worker access token validator must be a function");
+    }
     const ws = acceptWebSocketUpgrade(request, socket, head, {
       path: "/worker/ws",
       maxMessageBytes: MAX_WORKER_MESSAGE_BYTES,
     });
-    this.#attach(ws);
+    this.#attach(ws, accessTokenValidator);
   }
 
   status() {
@@ -284,7 +287,7 @@ export class BrowserWorkerPool {
     this.#notify();
   }
 
-  #attach(ws) {
+  #attach(ws, accessTokenValidator) {
     const worker = {
       index: this.nextWorkerIndex++,
       ws,
@@ -301,6 +304,7 @@ export class BrowserWorkerPool {
       sendChain: Promise.resolve(),
       session: null,
       transcript: null,
+      accessTokenValidator,
     };
     worker.handshakeTimer = setTimeout(() => ws.close(1008), HANDSHAKE_TIMEOUT_MS);
     this.workers.set(worker.index, worker);
@@ -370,6 +374,12 @@ export class BrowserWorkerPool {
     if (worker.handshakeStage === "hello") {
       const hello = decodeJson(payload, EngineMessageType.HELLO);
       if (hello.version !== 2) throw new Error("unsupported worker protocol version");
+      if (worker.accessTokenValidator) {
+        if (!worker.accessTokenValidator(String(hello.accessToken ?? ""))) {
+          throw new Error("worker access token is invalid or expired");
+        }
+        worker.accessTokenValidator = null;
+      }
       const clientPublicKey = decodeBase64Url(hello.publicKey, 65, "worker public key");
       const clientNonce = decodeBase64Url(hello.nonce, 32, "worker nonce");
       const ecdh = createECDH("prime256v1");

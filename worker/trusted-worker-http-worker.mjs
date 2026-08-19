@@ -98,6 +98,7 @@ const peer = new StdioPeer(process.stdin, process.stdout, {
         workerPool: pool,
         publicOriginProvider: () => publicOrigin,
         workerResetToken: params?.workerResetToken,
+        workerPageUrl: params?.workerPageUrl,
         workerTokenValidator(token) {
           return verifyWorkerAccessToken(workerAccessSecret, token);
         },

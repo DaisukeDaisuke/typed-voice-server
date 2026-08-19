@@ -106,8 +106,9 @@ function encodeAudioChunk(id, chunk) {
 }
 
 class VolunteerClient {
-  constructor(url) {
+  constructor(url, accessToken = null) {
     this.url = url;
+    this.accessToken = accessToken;
     this.socket = null;
     this.session = null;
     this.messages = [];
@@ -138,6 +139,7 @@ class VolunteerClient {
     const clientNonce = randomBytes(32);
     socket.send(encodeJson(EngineMessageType.HELLO, {
       version: 2,
+      ...(this.accessToken ? { accessToken: this.accessToken } : {}),
       publicKey: ecdh.getPublicKey().toString("base64url"),
       nonce: clientNonce.toString("base64url"),
     }));
@@ -221,14 +223,14 @@ class VolunteerClient {
   }
 }
 
-async function startPoolServer(pool) {
+async function startPoolServer(pool, accessTokenValidator = null) {
   const server = http.createServer((_request, response) => {
     response.writeHead(404, { "Content-Length": "0" });
     response.end();
   });
   server.on("upgrade", (request, socket, head) => {
     try {
-      pool.handleUpgrade(request, socket, head);
+      pool.handleUpgrade(request, socket, head, { accessTokenValidator });
     } catch {
       socket.destroy();
     }
@@ -239,6 +241,27 @@ async function startPoolServer(pool) {
   });
   return server;
 }
+
+test("Trusted Workerは固定ページ経由では最初のHELLOで接続トークンを検証できる", async () => {
+  const expectedToken = "c".repeat(128);
+  let suppliedToken = null;
+  const pool = new BrowserWorkerPool({ profile: "fp16", jobTimeoutMs: 5000 });
+  const server = await startPoolServer(pool, (token) => {
+    suppliedToken = token;
+    return token === expectedToken;
+  });
+  const port = server.address().port;
+  const worker = new VolunteerClient(`ws://127.0.0.1:${port}/worker/ws`, expectedToken);
+  try {
+    await worker.startReady();
+    assert.equal(suppliedToken, expectedToken);
+    assert.equal(pool.status().engines[0]?.authenticated, true);
+  } finally {
+    worker.close();
+    await pool.close();
+    await new Promise((resolvePromise) => server.close(resolvePromise));
+  }
+});
 
 test("Trusted Workerは各サーバーメッセージ前にPINGされ、脱落時は同じジョブを別Workerへ再割当する", async () => {
   const pool = new BrowserWorkerPool({ profile: "fp16", jobTimeoutMs: 5000 });

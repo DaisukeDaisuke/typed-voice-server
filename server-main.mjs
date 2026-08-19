@@ -31,6 +31,7 @@ const webDirectory = join(projectRoot, "web");
 const engineDirectory = join(projectRoot, "engine");
 const engineSourceDirectory = join(projectRoot, "engine-source");
 const dataDirectory = join(projectRoot, "data");
+const WORKER_PAGE_URL = "https://daisukedaisuke.github.io/typed-voice/worker.html";
 
 const storageWorkerPath = join(serverDirectory, "storage-worker.mjs");
 const adminWorkerPath = join(adminDirectory, "admin-http-worker.mjs");
@@ -641,6 +642,7 @@ async function startTrustedWorker() {
     modelProfile: state.modelProfile,
     workerAccessSecret: workerAccessSecret.toString("base64url"),
     workerResetToken,
+    workerPageUrl: WORKER_PAGE_URL,
   });
   ports.worker = Number(started?.address?.port);
   workerStatus = sanitizeWorkerStatus(started?.status);

@@ -11,6 +11,7 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sessionToken = "a".repeat(64);
 const workerToken = "c".repeat(128);
 const workerResetToken = "e".repeat(128);
+const workerPageUrl = "https://daisukedaisuke.github.io/typed-voice/worker.html";
 
 function httpRequest(port, { method = "GET", path, cookie = null, origin = null, forwardedHost = null, forwardedProto = null, hostHeader = null, body = null }) {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -130,11 +131,13 @@ function websocketUpgrade(port, cookie = null, origin = null, path = "/admin/ws"
 
 test("管理画面と管理WebSocketはセッショントークン由来Cookieなしでは到達できない", async () => {
   let workerUpgradeCalls = 0;
+  let workerUpgradeAccessTokenValidator = null;
   let workerResetCalls = 0;
   const fakePool = {
     status() { return { engines: [], running: 0, queued: 0, profile: "fp16" }; },
-    handleUpgrade(_request, socket) {
+    handleUpgrade(_request, socket, _head, { accessTokenValidator = null } = {}) {
       workerUpgradeCalls += 1;
+      workerUpgradeAccessTokenValidator = accessTokenValidator;
       socket.destroy();
     },
   };
@@ -153,6 +156,7 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     pairingProvider: () => null,
     publicOriginProvider: () => "https://public.example",
     workerResetToken,
+    workerPageUrl,
     onWorkerReset: async () => { workerResetCalls += 1; },
     workerTokenValidator: (token) => token === workerToken,
   });
@@ -240,6 +244,9 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     const workerLogin = await httpRequest(port, { path: "/worker/login" });
     assert.equal(workerLogin.statusCode, 200);
     assert.match(workerLogin.body, /128/u);
+    assert.match(workerLogin.body, /daisukedaisuke\.github\.io\/typed-voice\/worker\.html/u);
+    assert.match(workerLogin.body, /searchParams\.set\("server", server\)/u);
+    assert.match(workerLogin.body, /destination\.hash = token/u);
 
     const wrongWorker = await httpRequest(port, {
       method: "POST",
@@ -308,6 +315,11 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     assert.equal(workerUpgradeCalls, 3);
     await websocketUpgrade(port, workerCookie, `http://localhost:${port}`, "/worker/ws", "attacker.invalid", "https");
     assert.equal(workerUpgradeCalls, 3);
+    await websocketUpgrade(port, null, "https://daisukedaisuke.github.io", "/worker/ws");
+    assert.equal(workerUpgradeCalls, 4);
+    assert.equal(typeof workerUpgradeAccessTokenValidator, "function");
+    assert.equal(workerUpgradeAccessTokenValidator(workerToken), true);
+    assert.equal(workerUpgradeAccessTokenValidator("d".repeat(128)), false);
 
     const rejectedReset = await httpRequest(port, {
       method: "POST",
