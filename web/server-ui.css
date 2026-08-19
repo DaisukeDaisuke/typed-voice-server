@@ -39,7 +39,7 @@ body { margin: 0; min-width: 320px; background: #f3f1ed; }
 .server-history-form { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 18px 14px; border-top: 1px solid #ece7e1; }
 .server-history-form label { color: #81786f; font-size: .76rem; }
 .server-history-form input { min-width: 0; min-height: 38px; padding: 7px 10px; border: 1px solid #d8d2ca; border-radius: 9px; background: #fff; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.server-history-form button, .server-session-history { min-height: 34px; padding: 5px 10px; border: 1px solid #cfc7bd; border-radius: 9px; background: #fbfaf8; color: #5f5850; cursor: pointer; }
+.server-history-form button, .server-session-history, .server-session-client { min-height: 34px; padding: 5px 10px; border: 1px solid #cfc7bd; border-radius: 9px; background: #fbfaf8; color: #5f5850; cursor: pointer; }
 .server-history-metadata { margin: 0 18px 8px; padding: 10px 12px; border: 1px solid #e5dfd7; border-radius: 10px; background: #faf8f4; color: #756d64; font-size: .76rem; line-height: 1.55; white-space: pre-wrap; }
 .server-history-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 11px 18px; border-top: 1px solid #ece7e1; }
 .server-history-time { color: #8a8177; font-size: .73rem; font-variant-numeric: tabular-nums; }
@@ -52,6 +52,24 @@ body { margin: 0; min-width: 320px; background: #f3f1ed; }
 .server-session-text { grid-column: 1 / -1; margin: 0; color: #938a80; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .72rem; }
 .server-session-actions { grid-column: 1 / -1; display: flex; gap: 8px; }
 .server-session-disconnect { justify-self: start; min-height: 34px; padding: 5px 10px; border: 1px solid #dec5c0; border-radius: 9px; background: #fff6f4; color: #8a433c; cursor: pointer; }
+.server-client-dialog { width: min(720px, calc(100vw - 28px)); max-height: min(82vh, 820px); padding: 0; border: 1px solid #d8d2ca; border-radius: 18px; background: #fffdfa; color: inherit; box-shadow: 0 28px 90px #201a1440; }
+.server-client-dialog::backdrop { background: #28211a80; backdrop-filter: blur(4px); }
+.server-client-dialog-card { margin: 0; display: grid; }
+.server-client-dialog-close { min-height: 34px; padding: 5px 10px; border: 1px solid #cfc7bd; border-radius: 9px; background: #fbfaf8; color: #5f5850; cursor: pointer; }
+.server-client-dialog-id { margin: 0 18px 12px; overflow-wrap: anywhere; color: #81786f; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; }
+.server-client-dialog-sessions { display: grid; border-top: 1px solid #ece7e1; }
+.server-client-dialog-session { display: grid; gap: 4px; padding: 11px 18px; border-bottom: 1px solid #ece7e1; }
+.server-client-dialog-session strong { overflow-wrap: anywhere; }
+.server-client-dialog-session span { color: #81786f; font-size: .75rem; }
+.server-client-dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 18px; }
+.server-client-dialog-actions button, .server-client-ban-row button { min-height: 36px; padding: 6px 11px; border: 1px solid #dec5c0; border-radius: 9px; background: #fff6f4; color: #8a433c; cursor: pointer; }
+.server-client-dialog-actions #server-client-unban, .server-client-ban-row button { border-color: #cfc7bd; background: #fbfaf8; color: #5f5850; }
+.server-client-ban-list { border-top: 1px solid #ece7e1; }
+.server-client-ban-list .server-card-heading { padding-bottom: 8px; }
+.server-client-ban-list h3 { margin: 2px 0 0; font-size: 1rem; }
+.server-client-ban-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 9px 18px; border-top: 1px solid #ece7e1; }
+.server-client-ban-row code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .72rem; }
+#server-client-ban-empty { margin: 0; padding: 0 18px 16px; }
 .server-debug-form { display: grid; grid-template-columns: 70px 90px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 10px 18px 14px; border-top: 1px solid #ece7e1; }
 .server-debug-form label { padding-top: 8px; color: #81786f; font-size: .76rem; }
 .server-debug-form input, .server-debug-form textarea { width: 100%; border: 1px solid #d8d2ca; border-radius: 9px; background: #fff; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }

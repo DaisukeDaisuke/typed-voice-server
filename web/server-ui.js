@@ -16,6 +16,14 @@ const sessionList = document.getElementById("server-session-list");
 const sessionEmpty = document.getElementById("server-session-empty");
 const sessionCount = document.getElementById("server-session-count");
 const sessionTemplate = document.getElementById("server-session-template");
+const clientDialog = document.getElementById("server-client-dialog");
+const clientDialogTitle = document.getElementById("server-client-dialog-title");
+const clientDialogId = document.getElementById("server-client-dialog-id");
+const clientDialogSessions = document.getElementById("server-client-dialog-sessions");
+const clientBanButton = document.getElementById("server-client-ban");
+const clientUnbanButton = document.getElementById("server-client-unban");
+const clientBanList = document.getElementById("server-client-ban-list");
+const clientBanEmpty = document.getElementById("server-client-ban-empty");
 const workerList = document.getElementById("server-worker-list");
 const workerCount = document.getElementById("server-worker-count");
 const workerTemplate = document.getElementById("server-worker-template");
@@ -36,7 +44,13 @@ let qrModulePromise = null;
 let selectedConversationId = null;
 let selectedHistoryMetadata = null;
 let selectedHistoryEvents = [];
+let serverModelProfile = null;
+let modelSelectionDirty = false;
+let currentSessions = [];
+let currentClientBans = [];
+let selectedClientHash = null;
 const modelRequests = new Set();
+const clientBanRequests = new Set();
 
 function send(message) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return false;
@@ -54,10 +68,18 @@ function renderState(state) {
   stateFields.work.textContent = `${state.runningJobs ?? 0} / ${state.queuedJobs ?? 0}`;
   pairingEndpoint.textContent = state.pairingEndpoint || "未準備";
   pairingVersion.textContent = state.pairingReady ? "v1" : "接続情報待ち";
-  if (state.modelProfile && modelProfileSelect.value !== state.modelProfile) modelProfileSelect.value = state.modelProfile;
-  if (state.modelProfile) modelStatus.textContent = `現在: ${state.modelProfile}`;
+  if (state.modelProfile) {
+    serverModelProfile = state.modelProfile;
+    if (!modelSelectionDirty && modelRequests.size === 0 && modelProfileSelect.value !== state.modelProfile) {
+      modelProfileSelect.value = state.modelProfile;
+    }
+    if (!modelSelectionDirty && modelRequests.size === 0) modelStatus.textContent = `現在: ${state.modelProfile}`;
+  }
   renderSessions(state.sessions);
   renderWorkers(state.engineSlots);
+  currentClientBans = Array.isArray(state.clientBans) ? state.clientBans : [];
+  renderClientBanList();
+  if (selectedClientHash && clientDialog.open) renderClientDialog(selectedClientHash);
 }
 
 function renderWorkers(slots) {
@@ -79,6 +101,7 @@ function renderWorkers(slots) {
 
 function renderSessions(sessions) {
   const values = Array.isArray(sessions) ? sessions : [];
+  currentSessions = values;
   sessionList.replaceChildren();
   sessionCount.textContent = `${values.length}件`;
   sessionEmpty.hidden = values.length > 0;
@@ -88,7 +111,15 @@ function renderSessions(sessions) {
     const seen = new Date(Number(session.lastSeenAt || session.connectedAt || Date.now()));
     row.querySelector(".server-session-seen").textContent = `最終通信 ${seen.toLocaleString("ja-JP")}`;
     row.querySelector(".server-session-count-value").textContent = `合成 ${Number(session.requests || 0)} / 処理中 ${Number(session.pending || 0)}`;
-    row.querySelector(".server-session-text").textContent = session.conversationId ? `connection ${session.connectionId}` : "会話UUIDの通知待ち";
+    const shortClientId = /^[0-9a-f]{64}$/.test(String(session.clientHash ?? "")) ? `${session.clientHash.slice(0, 12)}…` : "ID待機中";
+    row.querySelector(".server-session-text").textContent = session.conversationId
+      ? `connection ${session.connectionId} / client ${shortClientId}`
+      : `会話UUIDの通知待ち / client ${shortClientId}`;
+    const clientButton = row.querySelector(".server-session-client");
+    clientButton.disabled = !/^[0-9a-f]{64}$/.test(String(session.clientHash ?? ""));
+    clientButton.addEventListener("click", () => {
+      if (session.clientHash) openClientDialog(session.clientHash);
+    });
     const historyButton = row.querySelector(".server-session-history");
     historyButton.disabled = !session.conversationId;
     historyButton.addEventListener("click", () => {
@@ -99,6 +130,80 @@ function renderSessions(sessions) {
     });
     sessionList.append(row);
   }
+}
+
+function openClientDialog(clientHash) {
+  const normalized = String(clientHash ?? "").toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(normalized)) return;
+  selectedClientHash = normalized;
+  renderClientDialog(normalized);
+  clientDialog.showModal();
+}
+
+function renderClientDialog(clientHash) {
+  const sessions = currentSessions.filter((session) => session.clientHash === clientHash);
+  const banned = currentClientBans.includes(clientHash);
+  clientDialogTitle.textContent = `${sessions.length}件の接続をまとめて表示`;
+  clientDialogId.textContent = clientHash;
+  clientDialogSessions.replaceChildren();
+  for (const session of sessions) {
+    const row = document.createElement("article");
+    row.className = "server-client-dialog-session";
+    const title = document.createElement("strong");
+    title.textContent = session.conversationId || `connection ${session.connectionId}`;
+    const meta = document.createElement("span");
+    meta.textContent = `最終通信 ${formatTimestamp(session.lastSeenAt || session.connectedAt)} / 合成 ${Number(session.requests || 0)} / 処理中 ${Number(session.pending || 0)}`;
+    row.append(title, meta);
+    clientDialogSessions.append(row);
+  }
+  if (!sessions.length) {
+    const empty = document.createElement("p");
+    empty.className = "server-meta";
+    empty.textContent = "このIDの現在接続中の会話はありません。";
+    clientDialogSessions.append(empty);
+  }
+  clientBanButton.hidden = banned;
+  clientUnbanButton.hidden = !banned;
+}
+
+function renderClientBanList() {
+  clientBanList.replaceChildren();
+  clientBanEmpty.hidden = currentClientBans.length > 0;
+  for (const clientHash of currentClientBans) {
+    const row = document.createElement("div");
+    row.className = "server-client-ban-row";
+    const code = document.createElement("code");
+    code.textContent = clientHash;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "解除";
+    button.addEventListener("click", () => requestClientBan(clientHash, false));
+    row.append(code, button);
+    clientBanList.append(row);
+  }
+}
+
+function requestClientBan(clientHash, banned) {
+  const normalized = String(clientHash ?? "").toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(normalized)) return;
+  const requestId = crypto.randomUUID().replace(/-/g, "");
+  clientBanRequests.add(requestId);
+  send({ type: "client-ban-set", requestId, clientHash: normalized, banned: Boolean(banned) });
+}
+
+function acceptClientBanResponse(message) {
+  if (!clientBanRequests.delete(message.requestId)) return;
+  if (!message.ok) {
+    showError(new Error(message.error || "端末BANを変更できませんでした。"));
+    return;
+  }
+  if (message.banned) {
+    if (!currentClientBans.includes(message.clientHash)) currentClientBans = [...currentClientBans, message.clientHash].sort();
+  } else {
+    currentClientBans = currentClientBans.filter((value) => value !== message.clientHash);
+  }
+  renderClientBanList();
+  if (selectedClientHash === message.clientHash && clientDialog.open) renderClientDialog(selectedClientHash);
 }
 
 async function openHistory(conversationId) {
@@ -148,6 +253,11 @@ function acceptModelResponse(message) {
   modelRequests.delete(message.requestId);
   modelProfileSelect.disabled = false;
   modelForm.querySelector('button[type="submit"]').disabled = false;
+  if (message.ok) {
+    serverModelProfile = message.modelProfile;
+    modelProfileSelect.value = message.modelProfile;
+    modelSelectionDirty = false;
+  }
   modelStatus.textContent = message.ok
     ? `変更済み: ${message.modelProfile}`
     : `変更失敗: ${message.error || "unknown error"}`;
@@ -205,7 +315,8 @@ function formatTimestamp(value) {
 
 async function renderPairing(pairing) {
   if (!pairing || typeof pairing !== "object") return;
-  const json = JSON.stringify(pairing);
+  const qrPayload = String(pairing.q ?? "");
+  if (!/^tvrkey1:[A-Za-z0-9_-]+$/.test(qrPayload)) throw new Error("QR用の暗号化接続情報がありません。");
   const fingerprint = `${pairing.u}\n${pairing.c}`;
   if (pairingFingerprint === fingerprint) return;
   pairingFingerprint = fingerprint;
@@ -213,7 +324,7 @@ async function renderPairing(pairing) {
   const module = await qrModulePromise;
   const toCanvas = module.toCanvas ?? module.default?.toCanvas;
   if (typeof toCanvas !== "function") throw new Error("QR生成ライブラリを読み込めませんでした。");
-  await toCanvas(pairingCanvas, json, { errorCorrectionLevel: "M", margin: 2, width: 320 });
+  await toCanvas(pairingCanvas, qrPayload, { errorCorrectionLevel: "M", margin: 2, width: 320 });
   pairingPlaceholder.hidden = true;
 }
 
@@ -247,6 +358,8 @@ function connect() {
         acceptHistoryEvent(message);
       } else if (message.type === "model-response") {
         acceptModelResponse(message);
+      } else if (message.type === "client-ban-response") {
+        acceptClientBanResponse(message);
       }
     } catch (error) {
       showError(error);
@@ -268,6 +381,10 @@ historyForm.addEventListener("submit", (event) => {
   event.preventDefault();
   void openHistory(historyUuidInput.value);
 });
+modelProfileSelect.addEventListener("change", () => {
+  modelSelectionDirty = modelProfileSelect.value !== serverModelProfile;
+  if (modelSelectionDirty) modelStatus.textContent = `変更候補: ${modelProfileSelect.value}`;
+});
 modelForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const modelProfile = modelProfileSelect.value;
@@ -278,6 +395,15 @@ modelForm.addEventListener("submit", (event) => {
   modelForm.querySelector('button[type="submit"]').disabled = true;
   modelStatus.textContent = `切り替え中: ${modelProfile}`;
   send({ type: "model-set", requestId, modelProfile });
+});
+clientBanButton.addEventListener("click", () => {
+  if (selectedClientHash) requestClientBan(selectedClientHash, true);
+});
+clientUnbanButton.addEventListener("click", () => {
+  if (selectedClientHash) requestClientBan(selectedClientHash, false);
+});
+clientDialog.addEventListener("close", () => {
+  selectedClientHash = null;
 });
 renderHistory();
 connect();

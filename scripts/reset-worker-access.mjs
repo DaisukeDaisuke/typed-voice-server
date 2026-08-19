@@ -8,14 +8,18 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const parsed = parseArgs({
   args: process.argv.slice(2),
   options: {
-    port: { type: "string", default: "3000" },
+    port: { type: "string" },
+    "port-file": { type: "string", default: "data/server/listen-port.txt" },
     "token-file": { type: "string", default: "data/worker/reset-token.txt" },
   },
   strict: true,
   allowPositionals: false,
 });
 
-const port = Number(parsed.values.port);
+const portSource = parsed.values.port === undefined
+  ? await readFile(resolve(projectRoot, String(parsed.values["port-file"])), "utf8")
+  : String(parsed.values.port);
+const port = Number(portSource.trim());
 if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error("--port must be 1..65535");
 const tokenFile = resolve(projectRoot, String(parsed.values["token-file"]));
 const token = await readFile(tokenFile, "utf8");

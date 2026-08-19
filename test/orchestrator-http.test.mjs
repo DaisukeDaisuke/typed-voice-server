@@ -112,6 +112,11 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     const address = await server.start();
     const port = address.port;
 
+    await assert.rejects(
+      httpRequest(port, { path: "/" }),
+      (error) => error?.code === "ECONNRESET",
+    );
+
     const missing = await httpRequest(port, { path: "/admin/" });
     assert.equal(missing.statusCode, 404);
     assert.equal(missing.body, "");
@@ -221,36 +226,12 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     });
     assert.equal(forgedProxyWorker.statusCode, 404);
 
-    const rejectedReset = await httpRequest(port, {
-      method: "POST",
-      path: "/worker/reset",
-      body: "f".repeat(128),
-    });
-    assert.equal(rejectedReset.statusCode, 404);
-    assert.equal(workerResetCalls, 0);
-
-    const acceptedReset = await httpRequest(port, {
-      method: "POST",
-      path: "/worker/reset",
-      body: workerResetToken,
-    });
-    assert.equal(acceptedReset.statusCode, 204);
-    assert.equal(workerResetCalls, 1);
-
-    const proxiedReset = await httpRequest(port, {
-      method: "POST",
-      path: "/worker/reset",
-      forwardedHost: "public.example",
-      forwardedProto: "https",
-      body: workerResetToken,
-    });
-    assert.equal(proxiedReset.statusCode, 404);
-    assert.equal(workerResetCalls, 1);
     const workerSetCookie = acceptedWorker.headers["set-cookie"]?.[0] ?? "";
     assert.match(workerSetCookie, /^typed_voice_worker_session=/u);
     assert.match(workerSetCookie, /HttpOnly/u);
     assert.match(workerSetCookie, /SameSite=Strict/u);
     const workerCookie = workerSetCookie.split(";", 1)[0];
+    assert.doesNotMatch(workerSetCookie, new RegExp(workerToken, "u"));
 
     const authorizedWorker = await httpRequest(port, { path: "/worker/", cookie: workerCookie });
     assert.equal(authorizedWorker.statusCode, 200);
@@ -268,6 +249,35 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     assert.equal(workerUpgradeCalls, 3);
     await websocketUpgrade(port, workerCookie, `http://localhost:${port}`, "/worker/ws", "attacker.invalid", "https");
     assert.equal(workerUpgradeCalls, 3);
+
+    const rejectedReset = await httpRequest(port, {
+      method: "POST",
+      path: "/worker/reset",
+      body: "f".repeat(128),
+    });
+    assert.equal(rejectedReset.statusCode, 404);
+    assert.equal(workerResetCalls, 0);
+
+    const acceptedReset = await httpRequest(port, {
+      method: "POST",
+      path: "/worker/reset",
+      body: workerResetToken,
+    });
+    assert.equal(acceptedReset.statusCode, 204);
+    assert.equal(workerResetCalls, 1);
+
+    const expiredWorkerSession = await httpRequest(port, { path: "/worker/", cookie: workerCookie });
+    assert.equal(expiredWorkerSession.statusCode, 404);
+
+    const proxiedReset = await httpRequest(port, {
+      method: "POST",
+      path: "/worker/reset",
+      forwardedHost: "public.example",
+      forwardedProto: "https",
+      body: workerResetToken,
+    });
+    assert.equal(proxiedReset.statusCode, 404);
+    assert.equal(workerResetCalls, 1);
   } finally {
     await server.close();
   }

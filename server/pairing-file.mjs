@@ -15,6 +15,10 @@ export function encodeEncryptedPairingFile(pairing, iv) {
   return Buffer.concat([FILE_MAGIC, iv, ciphertext, cipher.getAuthTag()]);
 }
 
+export function encodeEncryptedPairingText(pairing, iv) {
+  return `tvrkey1:${encodeEncryptedPairingFile(pairing, iv).toString("base64url")}`;
+}
+
 export async function writeEncryptedPairingFile(path, pairing, { randomBytes }) {
   if (typeof randomBytes !== "function") throw new Error("randomBytes function is required");
   await mkdir(dirname(path), { recursive: true });
@@ -33,4 +37,5 @@ export async function removeEncryptedPairingFile(path) {
 export const PAIRING_FILE_FORMAT = Object.freeze({
   magic: FILE_MAGIC.toString("ascii"),
   aad: FILE_AAD.toString("utf8"),
+  textPrefix: "tvrkey1:",
 });

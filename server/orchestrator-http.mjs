@@ -1,7 +1,7 @@
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { acceptWebSocketUpgrade } from "../worker/websocket.mjs";
 
 const ADMIN_COOKIE = "typed_voice_admin_session";
@@ -82,7 +82,7 @@ function adminCookie(token, request) {
 }
 
 function workerCookie(token, request) {
-  return `${WORKER_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/worker; Max-Age=630${isHttps(request) ? "; Secure" : ""}`;
+  return `${WORKER_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/worker${isHttps(request) ? "; Secure" : ""}`;
 }
 
 function requestOrigin(request) {
@@ -153,6 +153,7 @@ export class OrchestratorHttpServer {
     onHistorySubscribe = () => {},
     onHistoryUnsubscribe = () => {},
     onModelSet = async () => {},
+    onClientBanSet = async () => ({ clientHash: null, banned: false }),
     onPublicOrigin = async () => {},
     publicOriginProvider = () => null,
     onDiagnostic = () => {},
@@ -176,6 +177,7 @@ export class OrchestratorHttpServer {
     this.onHistorySubscribe = onHistorySubscribe;
     this.onHistoryUnsubscribe = onHistoryUnsubscribe;
     this.onModelSet = onModelSet;
+    this.onClientBanSet = onClientBanSet;
     this.onPublicOrigin = onPublicOrigin;
     this.publicOriginProvider = publicOriginProvider;
     this.onDiagnostic = onDiagnostic;
@@ -185,6 +187,7 @@ export class OrchestratorHttpServer {
     }
     this.onWorkerReset = onWorkerReset;
     this.workerTokenValidator = workerTokenValidator;
+    this.workerSessions = new Set();
     this.server = null;
     this.adminClients = new Set();
     this.adminAssets = null;
@@ -263,8 +266,7 @@ export class OrchestratorHttpServer {
       return;
     }
     if (request.method === "GET" && url.pathname === "/") {
-      response.writeHead(302, { Location: "/worker/login", "Cache-Control": "no-store" });
-      response.end();
+      request.socket.destroy();
       return;
     }
     if (request.method === "GET" && url.pathname === "/admin/login") {
@@ -322,8 +324,10 @@ export class OrchestratorHttpServer {
         noAccess(response);
         return;
       }
+      const workerSession = randomBytes(32).toString("hex");
+      this.workerSessions.add(workerSession);
       response.writeHead(204, {
-        "Set-Cookie": workerCookie(supplied, request),
+        "Set-Cookie": workerCookie(workerSession, request),
         "Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",
@@ -341,6 +345,7 @@ export class OrchestratorHttpServer {
         noAccess(response);
         return;
       }
+      this.workerSessions.clear();
       await this.onWorkerReset();
       response.writeHead(204, {
         "Cache-Control": "no-store",
@@ -413,7 +418,8 @@ export class OrchestratorHttpServer {
   }
 
   #workerAuthorized(request) {
-    return this.workerTokenValidator(cookieValue(request, WORKER_COOKIE));
+    const session = cookieValue(request, WORKER_COOKIE);
+    return typeof session === "string" && this.workerSessions.has(session);
   }
 
   #originAllowed(request) {
@@ -523,6 +529,33 @@ export class OrchestratorHttpServer {
           requestId,
           ok: false,
           modelProfile,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      return;
+    }
+    if (message.type === "client-ban-set") {
+      const requestId = String(message.requestId ?? "");
+      const clientHash = String(message.clientHash ?? "").toLowerCase();
+      const banned = Boolean(message.banned);
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(requestId) || !/^[0-9a-f]{64}$/.test(clientHash)) throw new Error("invalid client ban request");
+      void this.onClientBanSet(clientHash, banned).then((result) => {
+        if (client.ws.closed) return;
+        this.#sendAdmin(client, {
+          type: "client-ban-response",
+          requestId,
+          ok: true,
+          clientHash: result?.clientHash ?? clientHash,
+          banned: Boolean(result?.banned),
+        });
+      }).catch((error) => {
+        if (client.ws.closed) return;
+        this.#sendAdmin(client, {
+          type: "client-ban-response",
+          requestId,
+          ok: false,
+          clientHash,
+          banned,
           error: error instanceof Error ? error.message : String(error),
         });
       });

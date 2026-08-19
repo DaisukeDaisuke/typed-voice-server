@@ -1,4 +1,5 @@
 import {
+  createHash,
   createHmac,
   hkdfSync,
   randomBytes,
@@ -113,11 +114,15 @@ export async function probeRemoteEndpoint({
       clientNonce,
     ]));
     const hello = await next(15_000);
-    if (hello.length !== 68 || hello[0] !== Opcode.HELLO_SERVER || hello[1] !== VERSION || hello[2] !== audioFormat || hello[3] !== 0) {
+    if (hello.length !== 100 || hello[0] !== Opcode.HELLO_SERVER || hello[1] !== VERSION || hello[2] !== audioFormat || hello[3] !== 1) {
       throw new Error("remote probe received an invalid server HELLO");
     }
     const serverNonce = hello.subarray(4, 36);
-    const expectedServerProof = hmac(authKey, proofInput("server", audioFormat, clientNonce, serverNonce));
+    const clientBanSalt = hello.subarray(68, 100);
+    const expectedServerProof = hmac(authKey, Buffer.concat([
+      proofInput("server", audioFormat, clientNonce, serverNonce),
+      clientBanSalt,
+    ]));
     if (!timingSafeEqual(hello.subarray(36, 68), expectedServerProof)) throw new Error("remote probe server HMAC verification failed");
     const salt = Buffer.concat([clientNonce, serverNonce]);
     const session = {
@@ -128,10 +133,18 @@ export async function probeRemoteEndpoint({
       sendSeq: 0n,
       receiveSeq: 0n,
     };
-    const clientProof = hmac(authKey, proofInput("client", audioFormat, clientNonce, serverNonce));
+    const clientHash = createHash("sha256")
+      .update(Buffer.from("typed-voice-connectivity-probe/v1\n", "utf8"))
+      .update(clientBanSalt)
+      .digest();
+    const clientProof = hmac(authKey, Buffer.concat([
+      proofInput("client", audioFormat, clientNonce, serverNonce),
+      clientHash,
+    ]));
     socket.send(Buffer.concat([
       Buffer.from([Opcode.AUTH, VERSION, audioFormat, 0]),
       clientProof,
+      clientHash,
     ]));
 
     let configSeen = false;
@@ -143,6 +156,13 @@ export async function probeRemoteEndpoint({
         const modelProfile = ModelProfileFromCode[frame.payload[0]];
         if (modelProfile !== expectedModelProfile) throw new Error(`remote probe model config mismatch: ${modelProfile}`);
         configSeen = true;
+        continue;
+      }
+      if (frame.op === Opcode.WORKER_STATUS) {
+        if (frame.payload.length !== 4) throw new Error("remote probe worker status payload is invalid");
+        const connected = frame.payload.readUInt16BE(0);
+        const ready = frame.payload.readUInt16BE(2);
+        if (ready > connected) throw new Error("remote probe worker status counts are invalid");
         continue;
       }
       if (frame.op === Opcode.PING) {
@@ -168,6 +188,7 @@ export async function probeRemoteEndpoint({
         socket.send(encryptFrame(session, { op: Opcode.PONG, id: frame.id }));
         continue;
       }
+      if (frame.op === Opcode.WORKER_STATUS) continue;
       if (frame.op === Opcode.ERROR && frame.id === requestId) {
         throw new Error(`remote synthesis probe failed: ${frame.payload.subarray(2).toString("utf8")}`);
       }

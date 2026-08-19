@@ -18,6 +18,7 @@ export const Opcode = Object.freeze({
   PONG: 0x02,
   SESSION: 0x03,
   SERVER_CONFIG: 0x04,
+  WORKER_STATUS: 0x05,
   TEXT: 0x10,
   CANCEL: 0x11,
   AUDIO: 0x20,
@@ -60,7 +61,7 @@ function derive(key, salt, info, length) {
   return Buffer.from(hkdfSync("sha256", key, salt, Buffer.from(info, "utf8"), length));
 }
 
-export function acceptClientHello(frame, authKey, encryptionKey) {
+export function acceptClientHello(frame, authKey, encryptionKey, { clientBanSalt = null } = {}) {
   const bytes = Buffer.from(frame);
   if (bytes.length !== 36 || bytes[0] !== Opcode.HELLO_CLIENT || bytes[1] !== VERSION || bytes[3] !== 0) {
     throw new Error("invalid client hello");
@@ -69,8 +70,16 @@ export function acceptClientHello(frame, authKey, encryptionKey) {
   if (![AudioFormat.PCM16LE, AudioFormat.FLOAT32LE].includes(audioFormat)) throw new Error("unsupported audio format");
   const clientNonce = bytes.subarray(4, 36);
   const serverNonce = randomBytes(32);
-  const serverProof = hmac(authKey, proofInput("server", audioFormat, clientNonce, serverNonce));
-  const hello = concat(Buffer.from([Opcode.HELLO_SERVER, VERSION, audioFormat, 0]), serverNonce, serverProof);
+  const banSalt = clientBanSalt == null ? null : Buffer.from(clientBanSalt);
+  if (banSalt && banSalt.length !== 32) throw new Error("client ban salt must be 32 bytes");
+  const serverProofBase = proofInput("server", audioFormat, clientNonce, serverNonce);
+  const serverProof = hmac(authKey, banSalt ? concat(serverProofBase, banSalt) : serverProofBase);
+  const hello = concat(
+    Buffer.from([Opcode.HELLO_SERVER, VERSION, audioFormat, banSalt ? 1 : 0]),
+    serverNonce,
+    serverProof,
+    banSalt ?? Buffer.alloc(0),
+  );
   const salt = concat(clientNonce, serverNonce);
   const session = {
     audioFormat,
@@ -81,16 +90,30 @@ export function acceptClientHello(frame, authKey, encryptionKey) {
     receiveSeq: 0n,
     sendSeq: 0n,
     expectedClientProof: hmac(authKey, proofInput("client", audioFormat, clientNonce, serverNonce)),
+    clientProofInput: proofInput("client", audioFormat, clientNonce, serverNonce),
+    authKey: Buffer.from(authKey),
   };
   return { hello, session };
 }
 
-export function verifyClientAuth(frame, session) {
+export function readClientAuth(frame, session) {
   const bytes = Buffer.from(frame);
-  if (bytes.length !== 36 || bytes[0] !== Opcode.AUTH || bytes[1] !== VERSION || bytes[2] !== session.audioFormat || bytes[3] !== 0) {
-    return false;
+  if (![36, 68].includes(bytes.length) || bytes[0] !== Opcode.AUTH || bytes[1] !== VERSION || bytes[2] !== session.audioFormat || bytes[3] !== 0) {
+    return { valid: false, clientHash: null };
   }
-  return timingSafeEqual(bytes.subarray(4, 36), session.expectedClientProof);
+  const clientHashBytes = bytes.length === 68 ? bytes.subarray(36, 68) : null;
+  const expectedProof = clientHashBytes
+    ? hmac(session.authKey, concat(session.clientProofInput, clientHashBytes))
+    : session.expectedClientProof;
+  const valid = timingSafeEqual(bytes.subarray(4, 36), expectedProof);
+  return {
+    valid,
+    clientHash: valid && clientHashBytes ? clientHashBytes.toString("hex") : null,
+  };
+}
+
+export function verifyClientAuth(frame, session) {
+  return readClientAuth(frame, session).valid;
 }
 
 function nonce(prefix, seq) {

@@ -6,7 +6,8 @@ import { parseArgs } from "node:util";
 import { BrowserWorkerPool } from "./server/engine-pool.mjs";
 import { HistoryStore } from "./server/history-store.mjs";
 import { OrchestratorHttpServer } from "./server/orchestrator-http.mjs";
-import { writeEncryptedPairingFile, removeEncryptedPairingFile } from "./server/pairing-file.mjs";
+import { encodeEncryptedPairingText, writeEncryptedPairingFile, removeEncryptedPairingFile } from "./server/pairing-file.mjs";
+import { QuickTunnelProcess } from "./server/quick-tunnel.mjs";
 import { RemoteClientHub } from "./server/remote-hub.mjs";
 import { ServerSettingsStore } from "./server/settings-store.mjs";
 import {
@@ -23,15 +24,18 @@ const settingsPath = join(projectRoot, "data", "settings.json");
 const adminSessionTokenPath = join(projectRoot, "data", "admin", "session-token.txt");
 const workerSessionTokenPath = join(projectRoot, "data", "worker", "session-token.txt");
 const workerResetTokenPath = join(projectRoot, "data", "worker", "reset-token.txt");
+const serverPortPath = join(projectRoot, "data", "server", "listen-port.txt");
 const pairingFilePath = join(projectRoot, "data", "pairing", "typed-voice-server.tvrkey");
 
 const parsed = parseArgs({
   args: process.argv.slice(2),
   options: {
-    host: { type: "string", default: "0.0.0.0" },
-    port: { type: "string", default: "3000" },
+    host: { type: "string", default: "127.0.0.1" },
+    port: { type: "string", default: "0" },
     profile: { type: "string" },
     "public-origin": { type: "string" },
+    "no-quick-tunnel": { type: "boolean", default: false },
+    cloudflared: { type: "string" },
   },
   strict: true,
   allowPositionals: false,
@@ -39,7 +43,8 @@ const parsed = parseArgs({
 
 const host = String(parsed.values.host);
 const port = Number(parsed.values.port);
-if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error("--port must be 1..65535");
+if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new Error("--port must be 0..65535");
+let listenPort = null;
 const requestedProfile = parsed.values.profile === undefined ? null : String(parsed.values.profile);
 if (requestedProfile !== null && !["fp32", "fp16", "mobile-int8", "mobile-int4"].includes(requestedProfile)) throw new Error("--profile is not supported");
 
@@ -64,6 +69,7 @@ function terminalHyperlink(url, label = url) {
 }
 
 function browserOrigin() {
+  if (acceptedPublicOrigin) return `${acceptedPublicOrigin}/`;
   const configured = parsed.values["public-origin"];
   if (configured) {
     const url = new URL(String(configured));
@@ -72,24 +78,29 @@ function browserOrigin() {
     url.hash = "";
     return url.href;
   }
+  if (!Number.isSafeInteger(listenPort) || listenPort < 1) return null;
   const browserHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
   const normalizedHost = browserHost.includes(":") && !browserHost.startsWith("[") ? `[${browserHost}]` : browserHost;
-  return `http://${normalizedHost}:${port}/`;
+  return `http://${normalizedHost}:${listenPort}/`;
 }
 
 function loginUrl(pathname, token) {
-  const url = new URL(pathname, browserOrigin());
+  const origin = browserOrigin();
+  if (!origin) return null;
+  const url = new URL(pathname, origin);
   url.hash = String(token);
   return url.href;
 }
 
 function printWorkerLoginUrl(token) {
   const url = loginUrl("worker/login", token);
+  if (!url) return;
   consoleLine(ANSI.cyan, "[worker login]", terminalHyperlink(url, url));
 }
 
 function printAdminLoginUrl() {
   const url = loginUrl("admin/login", adminSessionToken);
+  if (!url) return;
   consoleLine(ANSI.magenta, "[admin login]", terminalHyperlink(url, url));
 }
 
@@ -156,6 +167,7 @@ const state = {
   pairingEndpoint: null,
   pairingReady: false,
   modelProfile: requestedProfile ?? "fp16",
+  clientBans: [],
 };
 
 let pairingPayload = null;
@@ -170,6 +182,7 @@ let historyStore = null;
 let workerPool = null;
 let remoteHub = null;
 let httpServer = null;
+let quickTunnel = null;
 let shuttingDown = false;
 let acceptedPublicOrigin = null;
 const historySubscriptions = new Map();
@@ -286,6 +299,14 @@ async function setServerModelProfile(modelProfile) {
   updateState({ modelProfile: normalized, model: `選択: ${normalized}` });
 }
 
+async function setClientBan(clientHash, banned) {
+  const normalized = String(clientHash ?? "").toLowerCase();
+  await settingsStore.setClientBanned(normalized, Boolean(banned));
+  if (banned) remoteHub.disconnectClientHash(normalized);
+  updateState({ clientBans: settingsStore.clientBans });
+  return { clientHash: normalized, banned: Boolean(banned) };
+}
+
 async function setPublicOrigin(value) {
   const url = new URL(String(value));
   if (url.protocol !== "https:") throw new Error("public origin must use https");
@@ -298,8 +319,9 @@ async function setPublicOrigin(value) {
   publicUrl.protocol = "wss:";
   if (pairingPayload?.u === publicUrl.href) return pairingPayload;
   const pairing = buildPairing(publicUrl.href, authKey, encryptionKey);
+  const pairingQr = encodeEncryptedPairingText(pairing, randomBytes(12));
   const resolvedPairingFilePath = await writeEncryptedPairingFile(pairingFilePath, pairing, { randomBytes });
-  pairingPayload = pairing;
+  pairingPayload = { ...pairing, q: pairingQr };
   pairingFileResolvedPath = resolvedPairingFilePath;
   updateState({
     overall: workerPool.status().engines.some((worker) => worker.info?.ready) ? "接続できます" : "Worker待機中",
@@ -312,13 +334,15 @@ async function setPublicOrigin(value) {
   consoleLine(ANSI.green, "[pairing file]", pairingFileResolvedPath);
   printAdminLoginUrl();
   printWorkerLoginUrl(currentWorkerAccessToken(workerAccessSecret).token);
-  return pairing;
+  return pairingPayload;
 }
 
 async function shutdown(exitCode = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
   updateState({ overall: "停止中" });
+  await quickTunnel?.stop().catch(() => {});
+  quickTunnel = null;
   await remoteHub?.close().catch(() => {});
   remoteHub = null;
   await workerPool?.close().catch(() => {});
@@ -338,6 +362,7 @@ async function shutdown(exitCode = 0) {
   workerSessionTokenResolvedPath = null;
   await removeSessionToken(workerResetTokenPath);
   workerResetTokenResolvedPath = null;
+  await removeSessionToken(serverPortPath);
   process.exitCode = exitCode;
 }
 
@@ -349,8 +374,10 @@ try {
   await removeSessionToken(adminSessionTokenPath);
   await removeSessionToken(workerSessionTokenPath);
   await removeSessionToken(workerResetTokenPath);
+  await removeSessionToken(serverPortPath);
   settingsStore = await new ServerSettingsStore(settingsPath).open();
   state.modelProfile = requestedProfile ?? settingsStore.modelProfile;
+  state.clientBans = settingsStore.clientBans;
   if (requestedProfile) await settingsStore.setModelProfile(requestedProfile);
   historyStore = await new HistoryStore(historyDirectory).open();
   adminSessionTokenResolvedPath = await writeSessionToken(adminSessionTokenPath, adminSessionToken);
@@ -361,6 +388,7 @@ try {
     profile: state.modelProfile,
     onState(partial) {
       updateState(partial);
+      remoteHub?.broadcastWorkerStatus();
       const hasReadyWorker = workerPool.status().engines.some((worker) => worker.info?.ready);
       if (hasReadyWorker && state.pairingReady) updateState({ overall: "接続できます" });
       else if (hasReadyWorker) updateState({ overall: "公開URL待機中" });
@@ -376,6 +404,10 @@ try {
     authKey,
     encryptionKey,
     modelProfile: state.modelProfile,
+    clientBanSalt: Buffer.from(settingsStore.clientBanSalt, "base64url"),
+    isClientBanned(clientHash) {
+      return settingsStore.isClientBanned(clientHash);
+    },
     onStatus(status) {
       updateState({
         clients: Number(status.authenticatedClients || 0),
@@ -410,6 +442,7 @@ try {
       else historySubscriptions.delete(conversationId);
     },
     onModelSet: setServerModelProfile,
+    onClientBanSet: setClientBan,
     onPublicOrigin: setPublicOrigin,
     onDiagnostic(message) {
       process.stderr.write(`[http] ${String(message).replace(/[\r\n]+/g, " ")}\n`);
@@ -424,17 +457,36 @@ try {
     },
   });
   const address = await httpServer.start();
+  listenPort = address.port;
+  const serverPortResolvedPath = await writeRawSecretToken(serverPortPath, String(address.port));
   updateState({ overall: "Worker待機中", engine: "Worker待機中", model: `選択: ${state.modelProfile}` });
 
   consoleLine(ANSI.green, "[server]", `${address.address}:${address.port}`);
+  consoleLine(ANSI.dim, "[listen port file]", serverPortResolvedPath);
   consoleLine(ANSI.cyan, "[worker]", `/worker/`);
   consoleLine(ANSI.magenta, "[remote]", `/remote`);
   consoleLine(ANSI.yellow, "[admin session token file]", adminSessionTokenResolvedPath);
   consoleLine(ANSI.yellow, "[worker reset token file]", workerResetTokenResolvedPath);
   consoleLine(ANSI.dim, "[worker reset endpoint]", `POST http://127.0.0.1:${address.port}/worker/reset`);
   printAdminLoginUrl();
+  printWorkerLoginUrl(currentWorkerAccessToken(workerAccessSecret).token);
 
-  if (parsed.values["public-origin"]) await setPublicOrigin(parsed.values["public-origin"]);
+  if (parsed.values["public-origin"]) {
+    await setPublicOrigin(parsed.values["public-origin"]);
+  } else if (!parsed.values["no-quick-tunnel"]) {
+    updateState({ tunnel: "Quick Tunnel起動中", overall: "公開URL待機中" });
+    quickTunnel = new QuickTunnelProcess({
+      localOrigin: `http://127.0.0.1:${address.port}`,
+      executable: parsed.values.cloudflared === undefined ? undefined : String(parsed.values.cloudflared),
+      onLog({ stream, text }) {
+        const normalized = String(text).replace(/\r\n/g, "\n");
+        process.stderr.write(`[cloudflared:${stream}] ${normalized}`);
+      },
+    });
+    const quickTunnelOrigin = await quickTunnel.start();
+    consoleLine(ANSI.cyan, "[quick tunnel]", quickTunnelOrigin);
+    await setPublicOrigin(quickTunnelOrigin);
+  }
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
   await shutdown(1);

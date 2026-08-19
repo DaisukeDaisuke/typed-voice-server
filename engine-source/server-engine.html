@@ -4,8 +4,75 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>typed-voice Trusted Worker</title>
+  <style>
+    .worker-tutorial-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      display: grid;
+      place-items: center;
+      overflow: auto;
+      padding: max(22px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) max(22px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
+      background: #fff1a8;
+      color: #2e291b;
+    }
+    .worker-tutorial-overlay[hidden] { display: none; }
+    .worker-tutorial-card {
+      width: min(760px, 100%);
+      padding: clamp(22px, 5vw, 42px);
+      border: 2px solid #7c6516;
+      border-radius: 22px;
+      background: #fff8cf;
+      box-shadow: 0 22px 70px #4f3f1329;
+    }
+    .worker-tutorial-kicker {
+      margin: 0 0 8px;
+      font-weight: 850;
+      color: #725900;
+    }
+    .worker-tutorial-card h1 {
+      margin: 0 0 18px;
+      font-size: clamp(1.7rem, 5vw, 2.8rem);
+      line-height: 1.25;
+    }
+    .worker-tutorial-warning {
+      padding: 16px 18px;
+      border: 1px solid #9b7920;
+      border-radius: 14px;
+      background: #fff3b4;
+      line-height: 1.7;
+    }
+    .worker-tutorial-warning p { margin: 10px 0 0; }
+    .worker-tutorial-warning strong { font-size: 1.08rem; }
+    .worker-tutorial-primary {
+      width: 100%;
+      min-height: 52px;
+      margin-top: 20px;
+      padding: 10px 16px;
+      border: 1px solid #4d411a;
+      border-radius: 14px;
+      background: #403719;
+      color: #fffdf4;
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+    }
+  </style>
 </head>
 <body>
+  <div id="worker-tutorial-overlay" class="worker-tutorial-overlay" role="dialog" aria-modal="true" aria-labelledby="worker-tutorial-title" data-profile="volunteer-warning">
+    <section class="worker-tutorial-card" data-worker-tutorial-profile="volunteer-warning">
+      <p class="worker-tutorial-kicker">音声合成ボランティアに参加する前に</p>
+      <h1 id="worker-tutorial-title">このページは、あなたの計算資源を音声合成へ提供します</h1>
+      <div class="worker-tutorial-warning">
+        <strong>これは音声合成のボランティアであり、ウイルスではありません。</strong>
+        <p>参加すると、このブラウザは音声合成モデルを読み込み、あなたのGPU・CPU・メモリ・通信回線・電力を使って、サーバー利用者の文章を音声へ変換します。</p>
+        <p><strong>騙されてこのページにアクセスした場合、そのまま参加すると、あなたの電気代と計算資源を「ボランティア」として無償提供することになります。サーバー管理者は、その電気代・通信費・機器負荷などの損害を補填してくれません。</strong></p>
+        <p>サーバー管理者から音声合成ボランティアへの参加を依頼された覚えがない場合は、参加ボタンを押さず、このページを閉じてください。</p>
+      </div>
+      <button id="worker-tutorial-continue" class="worker-tutorial-primary" type="button">内容を理解して、参加画面へ進む</button>
+    </section>
+  </div>
   <div id="service-worker-required" class="service-worker-required" role="alertdialog" aria-modal="true" aria-labelledby="service-worker-required-title" hidden>
     <div class="service-worker-required-card">
       <h1 id="service-worker-required-title">サービスワーカが必要です</h1>
@@ -13,7 +80,7 @@
       <button type="button" onclick="location.reload()">再試行</button>
     </div>
   </div>
-  <main class="volunteer-worker-shell">
+  <main id="volunteer-worker-main" class="volunteer-worker-shell" inert>
     <h1>typed-voice Trusted Worker</h1>
     <p>現在の10分Worker接続トークンで認証されたブラウザだけが、このWebGPUを音声合成Workerとして提供できます。参加を開始するまで、モデル読み込み・音声合成は行いません。</p>
     <p>参加中は、合成対象の文章がこのブラウザへ暗号化通信で送られ、ローカルで音声へ変換されます。Workerは入力文章と生成結果を扱えるため、信頼できる参加者だけに接続トークンを渡してください。</p>

@@ -34,7 +34,7 @@
           <div><dt>公開先</dt><dd id="server-pairing-endpoint">未準備</dd></div>
           <div><dt>暗号化</dt><dd>AES-256-GCM / HMAC-SHA-256 / HKDF-SHA-256</dd></div>
         </dl>
-        <p class="server-note">接続鍵は画面の文字列やログには表示しません。QRはブラウザ内で生成し、payloadを外部サービスへ送信しません。</p>
+        <p class="server-note">QRコードは株式会社デンソーウェーブの登録商標です<br>QR Code is a registered trademark of DENSO WAVE INCORPORATED in Japan and in other countries.</p>
       </article>
       <article class="server-card" aria-labelledby="server-state-title">
         <div class="server-card-heading"><div><p class="server-kicker">状況</p><h2 id="server-state-title">現在の状態</h2></div></div>
@@ -80,8 +80,27 @@
     </section>
 
   </main>
+  <dialog id="server-client-dialog" class="server-client-dialog">
+    <form method="dialog" class="server-client-dialog-card">
+      <div class="server-card-heading">
+        <div><p class="server-kicker">匿名端末ID</p><h2 id="server-client-dialog-title">接続端末</h2></div>
+        <button class="server-client-dialog-close" value="close" type="submit">閉じる</button>
+      </div>
+      <p id="server-client-dialog-id" class="server-client-dialog-id"></p>
+      <div id="server-client-dialog-sessions" class="server-client-dialog-sessions"></div>
+      <div class="server-client-dialog-actions">
+        <button id="server-client-ban" type="button">この端末IDをBAN</button>
+        <button id="server-client-unban" type="button" hidden>BANを解除</button>
+      </div>
+      <section class="server-client-ban-list" aria-labelledby="server-client-ban-list-title">
+        <div class="server-card-heading"><div><p class="server-kicker">BAN list</p><h3 id="server-client-ban-list-title">BAN済み端末ID</h3></div></div>
+        <div id="server-client-ban-list"></div>
+        <p id="server-client-ban-empty" class="server-meta">BAN済み端末はありません。</p>
+      </section>
+    </form>
+  </dialog>
   <template id="server-history-template"><article class="server-history-row"><time class="server-history-time"></time><p class="server-history-text"></p><span class="server-history-result"></span></article></template>
-  <template id="server-session-template"><article class="server-session-row"><div><strong class="server-session-id"></strong><span class="server-session-seen"></span></div><span class="server-session-count-value"></span><p class="server-session-text"></p><div class="server-session-actions"><button class="server-session-history" type="button">履歴</button><button class="server-session-disconnect" type="button">切断</button></div></article></template>
+  <template id="server-session-template"><article class="server-session-row"><div><strong class="server-session-id"></strong><span class="server-session-seen"></span></div><span class="server-session-count-value"></span><p class="server-session-text"></p><div class="server-session-actions"><button class="server-session-client" type="button">端末</button><button class="server-session-history" type="button">履歴</button><button class="server-session-disconnect" type="button">切断</button></div></article></template>
   <template id="server-worker-template"><article class="server-worker-row"><strong class="server-worker-name"></strong><span class="server-worker-state"></span><span class="server-worker-backend"></span></article></template>
   <script type="module" src="./server-ui.js"></script>
 </body>

@@ -1,6 +1,11 @@
 import "./poc.css";
 import { EngineClient } from "./engine/engine-client.js";
 import { requireServiceWorker } from "./app/service-worker-required.js";
+import {
+  hasKanalizerCandidate,
+  normalizeAsciiLetterRuns,
+  prepareKanalizerOffline,
+} from "./text/kanalizer-normalizer.js";
 
 const MESSAGE = Object.freeze({
   HELLO: 1,
@@ -30,7 +35,18 @@ const statusElement = document.getElementById("server-engine-status");
 const connectionElement = document.getElementById("volunteer-connection");
 const modelElement = document.getElementById("volunteer-model");
 const backendElement = document.getElementById("volunteer-backend");
+const workerMain = document.getElementById("volunteer-worker-main");
+const workerTutorialOverlay = document.getElementById("worker-tutorial-overlay");
+const workerTutorialContinue = document.getElementById("worker-tutorial-continue");
+const workerTutorialPages = [...document.querySelectorAll("[data-worker-tutorial-profile]")];
 const appBaseUrl = new URL(import.meta.env.BASE_URL, document.baseURI).href;
+
+const WORKER_TUTORIAL_PROFILES = Object.freeze({
+  "volunteer-warning": Object.freeze({
+    page: "volunteer-warning",
+  }),
+});
+const WORKER_TUTORIAL_ACK_KEY = "typed-voice-worker-volunteer-warning-ack";
 
 let socket = null;
 let session = null;
@@ -42,6 +58,29 @@ let engineInfo = null;
 let currentProfile = null;
 let configurationGeneration = 0;
 const synthesisGenerations = new Map();
+
+function openWorkerTutorialProfile(name) {
+  const profileName = String(name ?? "");
+  const profile = WORKER_TUTORIAL_PROFILES[profileName];
+  if (!profile) throw new Error(`Unknown worker tutorial profile: ${profileName}`);
+  workerTutorialOverlay.dataset.profile = profileName;
+  workerTutorialOverlay.hidden = false;
+  workerMain.inert = true;
+  for (const page of workerTutorialPages) {
+    page.hidden = page.dataset.workerTutorialProfile !== profile.page;
+  }
+}
+
+function completeWorkerTutorialProfile() {
+  try { sessionStorage.setItem(WORKER_TUTORIAL_ACK_KEY, "1"); } catch {}
+  workerTutorialOverlay.hidden = true;
+  workerMain.inert = false;
+  startButton.focus();
+}
+
+function workerTutorialAcknowledged() {
+  try { return sessionStorage.getItem(WORKER_TUTORIAL_ACK_KEY) === "1"; } catch { return false; }
+}
 
 function bytes(...values) {
   const arrays = values.map((value) => value instanceof Uint8Array ? value : new Uint8Array(value));
@@ -375,7 +414,14 @@ async function configureEngine(profile, reload) {
       },
     });
     engineClient = client;
-    await client.prepare(0);
+    await Promise.all([
+      client.prepare(0),
+      prepareKanalizerOffline({
+        onStatus(message) {
+          if (generation === configurationGeneration) setStatus(message);
+        },
+      }),
+    ]);
     if (generation !== configurationGeneration || engineClient !== client) {
       await client.dispose().catch(() => client.abort());
       return;
@@ -420,10 +466,21 @@ async function synthesizeForServer(id, text) {
   const generation = (synthesisGenerations.get(id) ?? 0) + 1;
   synthesisGenerations.set(id, generation);
   try {
+    let synthesisText = text;
+    if (hasKanalizerCandidate(synthesisText)) {
+      setStatus("英字の読みをKanalizerで正規化しています。");
+      const normalized = await normalizeAsciiLetterRuns(synthesisText, {
+        onStatus(message) {
+          if (synthesisGenerations.get(id) === generation) setStatus(message);
+        },
+      });
+      if (synthesisGenerations.get(id) !== generation) return;
+      synthesisText = normalized.text;
+    }
     const result = await client.synthesize({
       utteranceId: id,
       generation,
-      text,
+      text: synthesisText,
       options: { language: "ja", speed: 1 },
     });
     if (synthesisGenerations.get(id) !== generation) return;
@@ -489,3 +546,6 @@ startButton.addEventListener("click", () => {
   });
 });
 stopButton.addEventListener("click", () => void stopParticipation());
+workerTutorialContinue.addEventListener("click", completeWorkerTutorialProfile);
+if (workerTutorialAcknowledged()) completeWorkerTutorialProfile();
+else openWorkerTutorialProfile("volunteer-warning");

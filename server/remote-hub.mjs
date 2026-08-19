@@ -10,12 +10,13 @@ import {
   decryptFrame,
   encryptFrame,
   randomId,
-  verifyClientAuth,
+  readClientAuth,
 } from "../worker/protocol.mjs";
 import { acceptWebSocketUpgrade } from "../worker/websocket.mjs";
 
 const MAX_TEXT_BYTES = 16 * 1024;
 const AUDIO_CHUNK_BYTES = 64 * 1024;
+const WORKER_STATUS_INTERVAL_MS = 5_000;
 const MODEL_PROFILES = new Set(["fp32", "fp16", "mobile-int8", "mobile-int4"]);
 
 function errorPayload(code, message) {
@@ -54,6 +55,8 @@ export class RemoteClientHub {
     authKey,
     encryptionKey,
     modelProfile = "fp16",
+    clientBanSalt,
+    isClientBanned = () => false,
     onStatus = () => {},
     onHistory = () => {},
   }) {
@@ -62,10 +65,13 @@ export class RemoteClientHub {
     this.authKey = validateKey(authKey, "authKey");
     this.encryptionKey = validateKey(encryptionKey, "encryptionKey");
     this.modelProfile = validateProfile(modelProfile);
+    this.clientBanSalt = validateKey(clientBanSalt, "clientBanSalt");
+    this.isClientBanned = isClientBanned;
     this.onStatus = onStatus;
     this.onHistory = onHistory;
     this.clients = new Set();
     this.pending = new Map();
+    this.workerStatusTimer = null;
     this.closed = false;
   }
 
@@ -91,6 +97,7 @@ export class RemoteClientHub {
           lastSeenAt: client.lastSeenAt,
           requests: client.requests,
           pending: [...this.pending.values()].filter((entry) => entry.client === client).length,
+          clientHash: client.clientHash,
         })),
     };
   }
@@ -99,6 +106,13 @@ export class RemoteClientHub {
     this.modelProfile = validateProfile(modelProfile);
     for (const client of this.clients) if (client.authenticated) this.#sendServerConfig(client);
     return { modelProfile: this.modelProfile };
+  }
+
+  broadcastWorkerStatus() {
+    if (this.closed) return;
+    const status = this.#workerStatus();
+    for (const client of this.clients) if (client.authenticated) this.#sendWorkerStatus(client, status);
+    this.#scheduleWorkerStatus(status);
   }
 
   disconnect(connectionId) {
@@ -110,9 +124,23 @@ export class RemoteClientHub {
     return true;
   }
 
+  disconnectClientHash(clientHash) {
+    const normalized = String(clientHash ?? "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(normalized)) return 0;
+    let count = 0;
+    for (const client of this.clients) {
+      if (client.clientHash !== normalized) continue;
+      count += 1;
+      client.ws.close(1008);
+    }
+    return count;
+  }
+
   async close() {
     if (this.closed) return;
     this.closed = true;
+    clearTimeout(this.workerStatusTimer);
+    this.workerStatusTimer = null;
     for (const client of [...this.clients]) client.ws.close(1001);
     this.clients.clear();
     for (const [id, entry] of [...this.pending]) {
@@ -134,6 +162,7 @@ export class RemoteClientHub {
       stage: "hello",
       session: null,
       authenticated: false,
+      clientHash: null,
       authTimer: null,
       heartbeatTimer: null,
       pongTimer: null,
@@ -172,20 +201,29 @@ export class RemoteClientHub {
 
   #handleClientMessage(client, payload) {
     if (client.stage === "hello") {
-      const accepted = acceptClientHello(payload, this.authKey, this.encryptionKey);
+      const accepted = acceptClientHello(payload, this.authKey, this.encryptionKey, { clientBanSalt: this.clientBanSalt });
       client.session = accepted.session;
       client.stage = "auth";
       client.ws.sendBinary(accepted.hello);
       return;
     }
     if (client.stage === "auth") {
-      if (!verifyClientAuth(payload, client.session)) throw new Error("authentication failed");
+      const auth = readClientAuth(payload, client.session);
+      if (!auth.valid || !auth.clientHash) throw new Error("authentication failed");
+      client.clientHash = auth.clientHash;
+      if (this.isClientBanned(client.clientHash)) {
+        client.ws.close(1008);
+        return;
+      }
       clearTimeout(client.authTimer);
       client.authTimer = null;
       client.authenticated = true;
       client.stage = "ready";
       this.#emitStatus();
       this.#sendServerConfig(client);
+      const workerStatus = this.#workerStatus();
+      this.#sendWorkerStatus(client, workerStatus);
+      this.#scheduleWorkerStatus(workerStatus);
       this.#sendPing(client);
       return;
     }
@@ -326,6 +364,37 @@ export class RemoteClientHub {
       op: Opcode.SERVER_CONFIG,
       payload: Buffer.from([ModelProfileCode[this.modelProfile]]),
     });
+  }
+
+  #workerStatus() {
+    const engines = this.pool.status()?.engines;
+    const workers = Array.isArray(engines) ? engines : [];
+    const connected = workers.filter((worker) => worker?.connected).length;
+    const ready = workers.filter((worker) => worker?.connected && worker?.info?.ready).length;
+    return {
+      connected: Math.min(0xffff, connected),
+      ready: Math.min(0xffff, ready),
+    };
+  }
+
+  #sendWorkerStatus(client, status = this.#workerStatus()) {
+    const payload = Buffer.allocUnsafe(4);
+    payload.writeUInt16BE(status.connected, 0);
+    payload.writeUInt16BE(status.ready, 2);
+    this.#sendEncrypted(client, { op: Opcode.WORKER_STATUS, payload });
+  }
+
+  #scheduleWorkerStatus(status = this.#workerStatus()) {
+    clearTimeout(this.workerStatusTimer);
+    this.workerStatusTimer = null;
+    if (this.closed || status.ready > 0) return;
+    const hasAuthenticatedClient = [...this.clients].some((client) => client.authenticated);
+    if (!hasAuthenticatedClient) return;
+    this.workerStatusTimer = setTimeout(() => {
+      this.workerStatusTimer = null;
+      this.broadcastWorkerStatus();
+    }, WORKER_STATUS_INTERVAL_MS);
+    this.workerStatusTimer.unref?.();
   }
 
   #sendAudio(client, id, sampleRate, sampleCount, floatBytes) {

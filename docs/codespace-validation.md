@@ -2,7 +2,7 @@
 ## 目的
 Windows実機でChrome起動やプロセス管理を自動化せず、Node.jsサーバー単体をCodespacesで再現可能に動かし、公開経路・管理認証・短寿命Worker認証・Trusted Worker・Remote暗号通信を実経路で確認する。
 ## 前提
-- サーバーは`node server-main.mjs --host 0.0.0.0 --port 3000`で1プロセス起動する。
+- サーバーは`node server-main.mjs --host 0.0.0.0`で1プロセス起動し、`--port`未指定時はOSが空いているポートを割り当てる。実ポートは起動ログと`data/server/listen-port.txt`で確認する。
 - Codexを使う場合はサーバープロセス全体をCodespace内のCodex sandboxで起動する。サーバー自身からCodexを再帰起動しない。
 - Chrome/CDP自動起動、PID探索、Chrome kill、Chrome watchdogは行わない。
 - WebGPU Workerは現在の10分Worker接続トークンを持つ信頼済み参加者だけが`/worker/login#<token>`から認証し、参加UIを押した場合だけ増える。
@@ -15,23 +15,23 @@ Windows実機でChrome起動やプロセス管理を自動化せず、Node.jsサ
 6. `engine/server-engine.html`と対応するVite assetsが生成済みであることを確認する。
 7. `node --test test/*.test.mjs`を実行する。
 ## Node.jsサーバー確認
-1. Codex sandbox内で`node server-main.mjs --host 0.0.0.0 --port 3000`を起動する。
+1. Codex sandbox内で`node server-main.mjs --host 0.0.0.0`を起動する。
 2. `/health`が200を返すことを確認する。
 3. 起動ログに`data/admin/session-token.txt`の絶対パスと、token入りAdmin login URLが出ることを確認する。
 4. `data/admin/session-token.txt`が64桁小文字hexであり、POSIX環境では0600であることを確認する。
 5. 起動ログに`data/worker/session-token.txt`の絶対パス・有効期限・token入りWorker login URLが出ることを確認する。対応terminalではOSC 8 hyperlinkとしてクリック可能であり、非対応terminalでも完全URLが表示されることを確認する。Admin login URLも同様に起動時へ出す。
 6. `data/worker/session-token.txt`が128桁小文字hexで0600であり、10分window切替後に同じファイルへ新tokenだけが上書きされることを確認する。
 ## Codespaces temporary public deployment
-1. `3000`を`codespace__open_temporary_public_deployment`でpublicにする。
+1. `data/server/listen-port.txt`の実ポートを`codespace__open_temporary_public_deployment`でpublicにする。
 2. tokenなしの`https://<codespace-host>/admin/`が管理画面を返さないことを確認する。
 3. `session-token.txt`の内容を使って`/admin/login#<token>`へアクセスし、fragmentがHTTP URLへ送信されず、同一originの`POST /admin/session`成功後にCookie付き`/admin/`だけが表示されることを確認する。
 4. token/Cookieなしの`/admin/ws` Upgradeが拒否されることを確認する。
 5. 認証済み管理ページが実際のCodespaces originをサーバーへ通知し、`data/pairing/typed-voice-server.tvrkey`がそのhostの`wss://.../remote`で生成されることを確認する。
 6. Codespaces relayがbackendの`Origin`を`http://localhost:3000`へ書き換える場合でも、`X-Forwarded-Host`/`X-Forwarded-Proto`から復元したoriginが設定済みpublic originと厳密一致する場合だけAdmin/Worker sessionとWSSを受理することを確認する。別hostをforwardした要求は拒否する。
-7. 検証後は`codespace__close_temporary_public_deployment`で3000をprivateへ戻す。
+7. 検証後は`codespace__close_temporary_public_deployment`で実ポートをprivateへ戻す。
 ## Cloudflare Quick Tunnel実経路
-1. 同じCodespaceで`cloudflared tunnel --url http://localhost:3000`を起動する。
-2. 発行された`https://<random>.trycloudflare.com/admin/login#<token>`を開く。
+1. 同じCodespaceで通常起動し、Node.jsが実ポートを確定後にcloudflaredを自動起動することを確認する。
+2. cloudflaredログから正規表現で抽出された`https://<random>.trycloudflare.com`と、そこから生成されたAdmin/Worker URLを確認する。
 3. 認証済み管理ページがtrycloudflare originを通知し、pairing fileのWSS URLが`wss://<random>.trycloudflare.com/remote`へ更新されることを確認する。
 4. `data/pairing/typed-voice-server.tvrkey`を`codespace__copy_from_codespace`でローカルへ取得できることを確認する。
 5. 実クライアントモードへそのファイルを投入し、AUTH、SERVER_CONFIG、PING/PONGまで通ることを確認する。

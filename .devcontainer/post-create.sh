@@ -5,7 +5,13 @@ ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 CODEX_VERSION="0.147.0"
 CLOUDFLARED_VERSION="2026.8.2"
-TYPED_VOICE_COMMIT="407830d7745343443328806cc9996de666990ffe"
+
+printf '\n[typed-voice-server] Ensuring ripgrep is available...\n'
+if ! command -v rg >/dev/null 2>&1; then
+  sudo apt-get update
+  sudo apt-get install -y --no-install-recommends ripgrep
+fi
+rg --version | head -n 1
 
 printf '\n[typed-voice-server] Installing Codex CLI...\n'
 npm install -g "@openai/codex@${CODEX_VERSION}"
@@ -43,14 +49,6 @@ for generated_path in vite.config.js server-engine.html src/server-engine.js; do
     rm -f "typed-voice/$generated_path"
   fi
 done
-if [[ "$(git -C typed-voice rev-parse HEAD)" != "$TYPED_VOICE_COMMIT" ]]; then
-  git -C typed-voice fetch --no-tags origin main
-  git -C typed-voice checkout --detach "$TYPED_VOICE_COMMIT"
-fi
-if [[ "$(git -C typed-voice rev-parse HEAD)" != "$TYPED_VOICE_COMMIT" ]]; then
-  printf 'typed-voice checkout does not match pinned commit %s.\n' "$TYPED_VOICE_COMMIT" >&2
-  exit 1
-fi
 cp engine-source/server-engine.html typed-voice/server-engine.html
 cp engine-source/server-engine.js typed-voice/src/server-engine.js
 if git -C typed-voice apply --check ../engine-source/vite-server-entry.patch; then
@@ -80,4 +78,4 @@ node --test test/*.test.mjs
 printf '\n[typed-voice-server] Ready.\n'
 printf '  codex:       %s\n' "$(codex --version)"
 printf '  cloudflared: %s\n' "$(cloudflared --version)"
-printf '  server:      node server-main.mjs --host 0.0.0.0 --port 3000\n'
+printf '  server:      node server-main.mjs --host 0.0.0.0\n'
