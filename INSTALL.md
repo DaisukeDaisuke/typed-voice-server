@@ -1,46 +1,44 @@
-# Installation
-## Common requirements
-- Node.js 22.13 through 24.x. The sandbox workers use the stable `--permission` flag and explicit per-role filesystem allowlists; Node 25+ changes Permission Model network semantics and is intentionally outside the supported range until that path is separately designed and validated.
-- Codex CLI 0.147.0 or the repository-pinned compatible version. HTTP/WSS and storage workers are always launched through Codex sandbox.
-- Run the server itself as a normal user. Do not run `server-main.mjs` as Administrator/root.
-## Windows
-The native elevated Codex sandbox needs a one-time Administrator-approved provisioning step. The server does not perform this silently.
-
-Run the normal-user smoke check first:
-
+# インストール
+この手順はWindows向けです。上から順番に1つずつ実行します。
+> [!IMPORTANT]
+> `server-main.mjs` 自体は管理者として実行しません。通常ユーザーのPowerShellまたはWindows Terminalを使って準備してください。
+## 1. PowerShellを開く
+Windows TerminalまたはPowerShellを通常ユーザーとして開きます。
+<画像: Windows TerminalでPowerShellを通常ユーザーとして開いた画面>
+> [!TIP]
+> コマンドはまとめて貼り付けず、以下の順番で1つずつ実行すると、途中で問題が起きた場所を確認しやすくなります。
+## 2. Node.js LTSをインストールする
+次のコマンドでNode.js LTSをインストールします。
 ```powershell
-node scripts/codex-sandbox-check.mjs
+winget install -e --id OpenJS.NodeJS.LTS
 ```
-
-If the Windows sandbox setup marker is missing, unreadable, or incompatible with the pinned setup format, the script asks in English whether to run the official setup command. It does not invoke `codex sandbox` first, so first-time provisioning cannot trigger UAC before your answer. It proceeds only when you type `y`; the Windows UAC/elevation prompt is then owned by Codex.
-
-To provision it manually instead, run this from your normal PowerShell and explicitly approve the Windows UAC prompt when Codex requests Administrator privileges:
-
+<画像: wingetでNode.js LTSのインストールが完了した画面>
+> [!NOTE]
+> すでに対象のNode.js LTSがインストールされている場合、wingetはその状態を案内します。
+## 3. cloudflaredをインストールする
+次にCloudflare Quick Tunnelで使用する`cloudflared`をインストールします。
+```powershell
+winget install -e --id Cloudflare.cloudflared
+```
+<画像: wingetでcloudflaredのインストールが完了した画面>
+## 4. Codex CLIをインストールする
+Node.jsのインストール後、npmからCodex CLIをグローバルインストールします。
+```powershell
+npm install -g @openai/codex
+```
+<画像: npmでCodex CLIのインストールが完了した画面>
+> [!WARNING]
+> `npm` や `codex` が見つからないと表示された場合は、新しいPowerShellまたはWindows Terminalを開き直してから、その手順をもう一度実行してください。
+## 5. Codex sandboxをセットアップする
+最後に、WindowsでCodex sandboxを使うための初回セットアップを実行します。
 ```powershell
 codex sandbox setup --elevated --current-user
 ```
-
-Then run the smoke check again. Do not run the server or ordinary development shell elevated.
-## Linux / Codespaces
-Linux does not use the Windows provisioning command. Verify the host sandbox directly:
-
-```bash
-node scripts/codex-sandbox-check.mjs
-```
-
-The underlying command is `codex sandbox /usr/bin/true` (or `/bin/true`). In the Codespaces devcontainer this check is non-interactive and therefore never requests Administrator/root setup.
-## Additional sandbox paths
-`codex sandbox` uses the current host OS sandbox implementation on Windows, Linux, and macOS. Extra read-only roots can be passed repeatedly with:
-
-```text
---sandbox-state-readable-root <PATH>
-```
-
-Extra workspace-write roots belong in Codex configuration rather than an elevated setup script:
-
-```toml
-[sandbox_workspace_write]
-writable_roots = ["/path/to/workspace"]
-```
-
-On Windows use normal Windows paths in `writable_roots`. Grant only the directories needed by the task; provisioning the Windows sandbox and granting project write roots are separate concerns.
+<画像: Codex sandbox setupを実行し、Windowsの確認画面が表示された状態>
+> [!IMPORTANT]
+> このコマンドではWindowsの管理者承認が求められる場合があります。表示された内容を確認して承認してください。これはCodex sandboxを準備するための一度きりの昇格です。
+<画像: Codex sandbox setupが完了した画面>
+> [!CAUTION]
+> セットアップ完了後も、`server-main.mjs` や普段の開発用PowerShellを管理者として起動しないでください。サーバーは通常ユーザー権限で動かします。
+## インストール完了
+ここまで完了したら、[README.md](README.md) に戻ってサーバーを起動してください。
