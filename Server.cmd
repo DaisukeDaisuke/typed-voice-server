@@ -1,32 +1,36 @@
 @echo off
 chcp 65001 >nul
 setlocal
-cd /d "%~dp0" || goto :fail
+cd /d "%~dp0"
+if errorlevel 1 goto :fail
 
-where.exe node.exe >nul 2>&1 || (
+where.exe node.exe >nul 2>&1
+if errorlevel 1 (
   echo -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-  echo ^|  Node.js ãŒã‚¤ãƒ³ã‚¹ãƒˆãƒ¼ãƒ«ã•ã‚Œã¦ã„ã¾ã›ã‚“ï¼                              ^|
+  echo ^|  Node.js ‚ªƒCƒ“ƒXƒg[ƒ‹‚³‚ê‚Ä‚¢‚Ü‚¹‚ñI                              ^|
   echo ^|  winget install -e --id OpenJS.NodeJS.LTS                            ^|
   echo -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
   goto :fail
 )
 
-node "%~dp0docker.mjs" || goto :preflight_fail
+node "%~dp0docker.mjs"
+if errorlevel 1 goto :preflight_fail
 
 echo.
-node "%~dp0server-main.mjs" %* || goto :server_fail
+node "%~dp0server-main.mjs" %*
+if errorlevel 1 goto :server_fail
 
 endlocal
 exit /b 0
 
 :preflight_fail
 echo.
-echo èµ·å‹•æ¡ä»¶ã‚’æº€ãŸã—ã¦ã„ãªã„ãŸã‚ã€ã‚µãƒ¼ãƒãƒ¼ã‚’é–‹å§‹ã—ã¾ã›ã‚“ã€‚
+echo ‹N“®ğŒ‚ğ–‚½‚µ‚Ä‚¢‚È‚¢‚½‚ßAƒT[ƒo[‚ğŠJn‚µ‚Ü‚¹‚ñB
 goto :fail
 
 :server_fail
 echo.
-echo ã‚µãƒ¼ãƒãƒ¼ãŒã‚¨ãƒ©ãƒ¼ã§çµ‚äº†ã—ã¾ã—ãŸã€‚
+echo ƒT[ƒo[‚ªƒGƒ‰[‚ÅI—¹‚µ‚Ü‚µ‚½B
 goto :fail
 
 :fail
