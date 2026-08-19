@@ -94,6 +94,9 @@ if (requestedProfile !== null && !["fp32", "fp16", "mobile-int8", "mobile-int4"]
   throw new Error("--profile is not supported");
 }
 
+const linuxDirectTestBackend = process.platform !== "win32"
+  && process.env.TYPED_VOICE_LINUX_DIRECT_TEST === "1";
+
 const ANSI = Object.freeze({
   reset: "\x1b[0m",
   green: "\x1b[32m",
@@ -138,6 +141,7 @@ function sandboxFailure(name, error) {
 function sandboxConfig(name, script, { read = [], write = [], denyRead = [], sandbox = "elevated", fullDiskRead = false } = {}) {
   return {
     name,
+    backend: linuxDirectTestBackend ? "direct-test" : "codex",
     command: process.execPath,
     args: restrictedNodeArgs(script, { readRoots: read, writeRoots: write }),
     cwd: dirname(script),
@@ -564,7 +568,6 @@ async function startStorageWorker() {
     read: [serverDirectory],
     write: [dataDirectory],
     sandbox: "unelevated",
-    fullDiskRead: true,
   }), {
     onStderr: (chunk) => writeSandboxLog("storage", chunk),
     onExit: (code, signal) => sandboxFailure("storage", new Error(`exited (${signal ?? code ?? "unknown"})`)),
@@ -724,6 +727,10 @@ async function startAdminWorker() {
 }
 
 async function assertPublicWorkerIsolation() {
+  if (linuxDirectTestBackend) {
+    writeSandboxLog("security", "Linux direct-test backend: sibling loopback isolation is not asserted; the outer container is the test boundary.");
+    return;
+  }
   const roles = [
     ["admin", adminWorker],
     ["worker", trustedWorker],
@@ -766,11 +773,20 @@ async function shutdown(exitCode = 0) {
 process.once("SIGINT", () => void shutdown(0));
 process.once("SIGTERM", () => void shutdown(0));
 
+if (linuxDirectTestBackend) {
+  writeSandboxLog("security", "Linux direct-test backend enabled: workers run directly inside the outer container; Windows Codex sandbox guarantees are not being tested.");
+}
+
+let startupStage = "storage worker";
 try {
   await startStorageWorker();
+  startupStage = "trusted worker";
   await startTrustedWorker();
+  startupStage = "remote worker";
   await startRemoteWorker();
+  startupStage = "admin worker";
   await startAdminWorker();
+  startupStage = "public worker isolation probe";
   await assertPublicWorkerIsolation();
 
   updateState({
@@ -806,6 +822,7 @@ try {
   }
   recomputeOverall();
 } catch (error) {
+  writeSandboxLog("startup", `stage=${startupStage}`);
   writeSandboxLog("startup", error instanceof Error ? error.stack ?? error.message : String(error));
   await shutdown(1);
 }

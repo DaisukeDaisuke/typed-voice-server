@@ -71,7 +71,7 @@ jobs:
         run: |
           mkdir -p dist/typed-voice-server/engine
           cp server-main.mjs docker.mjs Server.cmd package.json README.md INSTALL.md SPECIFICATION.md LICENSE dist/typed-voice-server/
-          cp -R server admin worker web docs dist/typed-voice-server/
+          cp -R server admin worker web docs data dist/typed-voice-server/
           cp -R typed-voice/dist/. dist/typed-voice-server/engine/
           cp typed-voice/THIRD_PARTY_NOTICES.md dist/THIRD_PARTY_NOTICES.md
           cat > dist/RELEASE_NOTES.md <<'EOF'

@@ -237,7 +237,7 @@ function checkSandboxSetup(problems) {
 }
 
 function checkReleaseFiles(problems) {
-  const required = [
+  const requiredFiles = [
     "server-main.mjs",
     "docker.mjs",
     "package.json",
@@ -257,8 +257,9 @@ function checkReleaseFiles(problems) {
     "web/server-ui.js",
     "engine/index.html",
   ];
+  const requiredDirectories = ["data"];
   const missing = [];
-  for (const relativePath of required) {
+  for (const relativePath of requiredFiles) {
     const path = join(PROJECT_ROOT, relativePath);
     if (!existsSync(path)) {
       missing.push(relativePath);
@@ -269,6 +270,19 @@ function checkReleaseFiles(problems) {
       if (!info.isFile()) missing.push(relativePath);
     } catch {
       missing.push(relativePath);
+    }
+  }
+  for (const relativePath of requiredDirectories) {
+    const path = join(PROJECT_ROOT, relativePath);
+    if (!existsSync(path)) {
+      missing.push(`${relativePath}/`);
+      continue;
+    }
+    try {
+      const info = statSync(path);
+      if (!info.isDirectory()) missing.push(`${relativePath}/`);
+    } catch {
+      missing.push(`${relativePath}/`);
     }
   }
   if (missing.length) {

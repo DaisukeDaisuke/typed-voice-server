@@ -1,4 +1,5 @@
 import { CodexSandboxProcess } from "./codex-sandbox-launcher.mjs";
+import { DirectWorkerProcess } from "./direct-worker-process.mjs";
 import { StdioPeer } from "./stdio-peer.mjs";
 
 export class SandboxWorkerClient {
@@ -12,7 +13,8 @@ export class SandboxWorkerClient {
     this.onRequest = onRequest;
     this.onEvent = onEvent;
     this.peer = null;
-    this.process = new CodexSandboxProcess(config, {
+    const ProcessBackend = config.backend === "direct-test" ? DirectWorkerProcess : CodexSandboxProcess;
+    this.process = new ProcessBackend(config, {
       onStderr,
       onExit: (code, signal) => {
         this.peer?.close(new Error(`sandbox worker exited (${signal ?? code ?? "unknown"})`));

@@ -24,10 +24,11 @@ test("storage profile grants write only to the data root", () => {
     allowedDirectories: ["C:\\repo\\data"],
     sandboxReadOnlyDirectories: ["C:\\repo\\server"],
     sandbox: "unelevated",
-    fullDiskRead: true,
   });
   assert.match(profile, /'C:\\repo\\data'='write'/u);
-  assert.match(profile, /':root'='read'/u);
+  assert.match(profile, /':minimal'='read'/u);
+  assert.match(profile, /'C:\\repo\\server'='read'/u);
+  assert.doesNotMatch(profile, /':root'='read'/u);
   assert.match(profile, /network=\{enabled=false\}\}$/u);
 });
 

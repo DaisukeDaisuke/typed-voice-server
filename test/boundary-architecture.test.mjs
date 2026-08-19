@@ -47,8 +47,20 @@ test("Admin and Trusted Worker Quick Tunnels are explicit opt-in while Remote re
 test("public workers deny-read data while storage uses the distinct unelevated identity", async () => {
   const main = await source("server-main.mjs");
   assert.match(main, /sandboxConfig\("storage-worker"[\s\S]*?sandbox:\s*"unelevated"/u);
-  assert.match(main, /sandboxConfig\("storage-worker"[\s\S]*?fullDiskRead:\s*true/u);
+  assert.doesNotMatch(main, /sandboxConfig\("storage-worker"[\s\S]*?fullDiskRead:\s*true/u);
   assert.equal((main.match(/denyRead:\s*\[dataDirectory\]/gu) ?? []).length, 3);
+});
+
+test("Linux direct-test backend is explicit and never replaces the Windows Codex boundary", async () => {
+  const [main, client] = await Promise.all([
+    source("server-main.mjs"),
+    source("server/sandbox-worker-client.mjs"),
+  ]);
+  assert.match(main, /process\.platform !== "win32"[\s\S]*?TYPED_VOICE_LINUX_DIRECT_TEST === "1"/u);
+  assert.match(main, /backend:\s*linuxDirectTestBackend \? "direct-test" : "codex"/u);
+  assert.match(client, /config\.backend === "direct-test" \? DirectWorkerProcess : CodexSandboxProcess/u);
+  assert.match(main, /Windows Codex sandbox guarantees are not being tested/u);
+  assert.match(main, /sibling loopback isolation is not asserted/u);
 });
 
 test("startup fails closed unless every public HTTP worker is unable to connect to sibling ports", async () => {
