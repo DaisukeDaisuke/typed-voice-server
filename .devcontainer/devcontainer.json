@@ -8,12 +8,6 @@
       "version": "24",
       "npmVersion": "10.9.8"
     },
-    "ghcr.io/devcontainers/features/rust:1": {
-      "version": "1.85",
-      "profile": "minimal",
-      "targets": "wasm32-unknown-unknown",
-      "components": "rustfmt,clippy"
-    },
     "ghcr.io/devcontainers/features/sshd:1": {
       "version": "latest"
     }

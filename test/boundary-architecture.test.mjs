@@ -133,10 +133,19 @@ test("role listener implementation rejects non-loopback binds", async () => {
   assert.match(http, /host = "127\.0\.0\.1"/u);
 });
 
-test("trusted worker probes an allowed engine file instead of statting the engine directory", async () => {
-  const worker = await source("worker/trusted-worker-http-worker.mjs");
-  assert.match(worker, /existsSync\(join\(builtEngineRoot, "index\.html"\)\)/u);
-  assert.doesNotMatch(worker, /existsSync\(builtEngineRoot\)/u);
+test("trusted worker runtime does not depend on server-bundled browser assets", async () => {
+  const [main, worker, http, build, docker] = await Promise.all([
+    source("server-main.mjs"),
+    source("worker/trusted-worker-http-worker.mjs"),
+    source("server/orchestrator-http.mjs"),
+    source(".github/workflows/build.yml"),
+    source("docker.mjs"),
+  ]);
+  assert.doesNotMatch(main, /engineDirectory|engineSourceDirectory/u);
+  assert.doesNotMatch(worker, /engineRoot|builtEngineRoot|sourceEngineRoot/u);
+  assert.doesNotMatch(http, /engineRoot|serveEngineAsset/u);
+  assert.doesNotMatch(build, /typed-voice\/dist|typed-voice-server\/engine/u);
+  assert.doesNotMatch(docker, /engine\/index\.html/u);
 });
 
 test("storage worker exposes fixed operations instead of arbitrary path writes", async () => {

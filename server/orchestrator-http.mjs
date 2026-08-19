@@ -1,6 +1,6 @@
 import http from "node:http";
 import { readFile } from "node:fs/promises";
-import { extname, resolve, sep } from "node:path";
+import { resolve } from "node:path";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { acceptWebSocketUpgrade } from "../worker/websocket.mjs";
 
@@ -55,19 +55,6 @@ if (!/^[0-9a-f]{128}$/.test(token)) {
 }
 </script></body></html>`, "utf8");
 }
-const MIME_TYPES = Object.freeze({
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".mjs": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".wasm": "application/wasm",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".ico": "image/x-icon",
-  ".woff2": "font/woff2",
-});
-
 function safeEqual(leftValue, rightValue) {
   const left = Buffer.from(String(leftValue ?? ""), "utf8");
   const right = Buffer.from(String(rightValue ?? ""), "utf8");
@@ -158,26 +145,12 @@ function noAccess(response) {
   response.end();
 }
 
-function setIsolationHeaders(response) {
-  response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-  response.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
-  response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-}
-
-function safeAssetPath(root, relativePath) {
-  const normalizedRoot = resolve(root);
-  const path = resolve(normalizedRoot, relativePath);
-  if (path !== normalizedRoot && !path.startsWith(`${normalizedRoot}${sep}`)) throw new Error("asset path escapes root");
-  return path;
-}
-
 export class OrchestratorHttpServer {
   constructor({
     host = "127.0.0.1",
     port = 3000,
     sessionToken,
     webRoot,
-    engineRoot,
     workerPool,
     remoteHub,
     stateProvider,
@@ -213,7 +186,6 @@ export class OrchestratorHttpServer {
     this.port = port;
     this.sessionToken = sessionToken;
     this.webRoot = webRoot;
-    this.engineRoot = engineRoot;
     this.workerPool = workerPool;
     this.remoteHub = remoteHub;
     this.stateProvider = stateProvider;
@@ -451,38 +423,12 @@ export class OrchestratorHttpServer {
       return;
     }
     if (this.roles.has("worker") && request.method === "GET" && (url.pathname === "/worker" || url.pathname === "/worker/")) {
-      // Worker本体へ入る前に認証を確定する。未認証・失効済み・破損Cookieなら
-      // engine HTML（チュートリアルを含む）を一切返さず、ログインページへ戻す。
       if (!this.#workerAuthorized(request)) return redirectWorkerLogin(request, response);
-      await this.#serveEngineAsset("server-engine.html", response, false);
-      return;
-    }
-    if (this.roles.has("worker") && request.method === "GET" && url.pathname.startsWith("/worker/")) {
-      if (!this.#workerAuthorized(request)) return noAccess(response);
-      const relativePath = decodeURIComponent(url.pathname.slice("/worker/".length));
-      const immutable = relativePath.startsWith("assets/");
-      await this.#serveEngineAsset(relativePath, response, immutable);
+      noAccess(response);
       return;
     }
     response.writeHead(404, { "Content-Length": "0", "Cache-Control": "no-store" });
     response.end();
-  }
-
-  async #serveEngineAsset(relativePath, response, immutable) {
-    const path = safeAssetPath(this.engineRoot, relativePath);
-    try {
-      const bytes = await readFile(path);
-      setIsolationHeaders(response);
-      response.writeHead(200, {
-        "Content-Type": MIME_TYPES[extname(path).toLowerCase()] || "application/octet-stream",
-        "Cache-Control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
-      });
-      response.end(bytes);
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-      response.writeHead(404, { "Content-Length": "0" });
-      response.end();
-    }
   }
 
   #adminAuthorized(request) {

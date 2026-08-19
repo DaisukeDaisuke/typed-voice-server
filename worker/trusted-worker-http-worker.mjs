@@ -1,14 +1,8 @@
-import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { BrowserWorkerPool } from "../server/engine-pool.mjs";
 import { OrchestratorHttpServer } from "../server/orchestrator-http.mjs";
 import { createFdStdioPeer } from "../server/stdio-peer.mjs";
 import { verifyWorkerAccessToken } from "../server/worker-access-token.mjs";
 
-const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const builtEngineRoot = join(projectRoot, "engine");
-const sourceEngineRoot = join(projectRoot, "engine-source");
 const AUDIO_CHUNK_BYTES = 64 * 1024;
 
 let pool = null;
@@ -160,7 +154,6 @@ const peer = createFdStdioPeer({
         port: Number(params?.port ?? 0),
         roles: ["worker"],
         originCapabilityHost: params?.originCapabilityHost,
-        engineRoot: existsSync(join(builtEngineRoot, "index.html")) ? builtEngineRoot : sourceEngineRoot,
         workerPool: pool,
         publicOriginProvider: () => publicOrigin,
         workerServerUrlProvider: () => workerServerUrl,

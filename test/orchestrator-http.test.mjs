@@ -58,7 +58,6 @@ test("role別listenerは別roleを公開せずproxy経路ではport固有Host ca
     port: 0,
     roles: ["worker"],
     originCapabilityHost: capabilityHost,
-    engineRoot: resolve(projectRoot, "engine-source"),
     workerPool: fakePool,
     publicOriginProvider: () => "https://public.example",
     workerTokenValidator: (token) => token === workerToken,
@@ -150,7 +149,6 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     port: 0,
     sessionToken,
     webRoot: resolve(projectRoot, "web"),
-    engineRoot: resolve(projectRoot, "engine-source"),
     workerPool: fakePool,
     remoteHub: fakeRemoteHub,
     stateProvider: () => ({ overall: "test" }),
@@ -303,8 +301,8 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     assert.doesNotMatch(workerSetCookie, new RegExp(workerToken, "u"));
 
     const authorizedWorker = await httpRequest(port, { path: "/worker/", cookie: workerCookie });
-    assert.equal(authorizedWorker.statusCode, 200);
-    assert.match(authorizedWorker.body, /Trusted Worker/u);
+    assert.equal(authorizedWorker.statusCode, 404);
+    assert.equal(authorizedWorker.body, "");
 
     await websocketUpgrade(port, null, `http://127.0.0.1:${port}`, "/worker/ws");
     assert.equal(workerUpgradeCalls, 0);

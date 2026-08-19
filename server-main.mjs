@@ -28,8 +28,6 @@ const serverDirectory = join(projectRoot, "server");
 const workerDirectory = join(projectRoot, "worker");
 const adminDirectory = join(projectRoot, "admin");
 const webDirectory = join(projectRoot, "web");
-const engineDirectory = join(projectRoot, "engine");
-const engineSourceDirectory = join(projectRoot, "engine-source");
 const dataDirectory = join(projectRoot, "data");
 const WORKER_PAGE_URL = "https://daisukedaisuke.github.io/typed-voice/worker.html";
 
@@ -604,7 +602,7 @@ async function startStorageWorker() {
 
 async function startTrustedWorker() {
   trustedWorker = new SandboxWorkerClient(sandboxConfig("trusted-worker-http", trustedWorkerPath, {
-    read: [workerDirectory, serverDirectory, engineDirectory, engineSourceDirectory],
+    read: [workerDirectory, serverDirectory],
     denyRead: [dataDirectory],
   }), {
     onRequest(method) {

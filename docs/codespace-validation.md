@@ -15,7 +15,7 @@ Windows実機の用途別Codex sandbox境界を壊さず、Codespacesでは同�
 3. `cloudflared --version`が成功することを確認する。
 4. `node scripts/codex-sandbox-check.mjs --non-interactive`が通常の`vscode`ユーザーで成功することを確認する。Linuxでは内部で`codex sandbox /usr/bin/true`または`/bin/true`を実行し、Windows専用setupや`sudo codex sandbox ...`は使わない。
 5. `gh codespace ssh`/Codespace MCPから接続できるようSSH serverが有効であることを確認する。
-6. `engine/server-engine.html`と対応するVite assetsが生成済みであることを確認する。
+6. server releaseが`engine/`や`server-engine.html`を必要とせず、Worker browser assetsはtyped-voice GitHub Pages側でbuildされることを確認する。
 7. `node --test test/*.test.mjs`を実行する。
 ## Node.jsサーバー確認
 1. 通常ユーザー権限で`node server-main.mjs`を起動し、親プロセス自身がlistenしていないことを確認する。親全体をCodex sandboxへ入れて子sandboxをネストしない。
@@ -40,10 +40,10 @@ Windows実機の用途別Codex sandbox境界を壊さず、Codespacesでは同�
 4. `data/pairing/typed-voice-server.tvrkey`を`codespace__copy_from_codespace`でローカルへ取得できることを確認する。
 5. 実クライアントモードへそのファイルを投入し、AUTH、SERVER_CONFIG、PING/PONGまで通ることを確認する。
 ## Trusted Worker
-1. tokenなしの`/worker/`と`/worker/ws`が拒否され、Worker HTML/JS/WASMやWSS鍵交換へ到達できないことを確認する。
-2. `data/worker/session-token.txt`の内容を使って`/worker/login#<token>`へアクセスし、fragmentがHTTP URLへ送信されず、同一originの`POST /worker/session`成功後だけ`/worker/`が表示されることを確認する。
+1. tokenなしの`/worker/`と`/worker/ws`が拒否され、server側からWorker HTML/JS/WASMが配信されないことを確認する。
+2. `data/worker/session-token.txt`の内容を使って`/worker/login#<token>`へアクセスし、fragmentがHTTP URLへ送信されず、同一originの`POST /worker/session`成功後に`https://daisukedaisuke.github.io/typed-voice/worker.html?server=wss%3A%2F%2F<remote-host>%2Fremote#<token>`へ遷移することを確認する。
 3. 誤tokenと期限切れtokenが拒否され、10分window切替直後30秒だけ直前tokenが境界graceとして受理されることを確認する。
-4. 「このブラウザで参加する」を押して初めて`/worker/ws`へ接続することを確認する。
+4. 「このブラウザで参加する」を押して初めて公開`/remote` WSSへ接続し、Trusted Worker handshakeがRemote client handshakeと区別されてTrusted Worker sandboxへ中継されることを確認する。
 5. P-256一時ECDH公開鍵交換、双方proof、方向別AES-256-GCMセッション確立を確認する。
 6. サーバーがCONFIGを送る前にPINGし、PONG成功後だけCONFIGが届くことを確認する。
 7. モデル準備中でもPING/PONGへ即応し、モデルダウンロード時間を死活timeoutとして誤判定しないことを確認する。
@@ -76,7 +76,7 @@ Windows実機の用途別Codex sandbox境界を壊さず、Codespacesでは同�
 - Windowsでは親Node.jsにlistener/file-writeを戻さず、Admin・Worker・Remote・storageの用途別Codex sandbox境界を維持したままtrycloudflare実経路が動く。
 - Codespaces/LinuxでWindowsと同じloopback ingressが成立しない場合、その制約を明記し、sandboxを弱めた代替実装を完了扱いしない。
 - 管理セッショントークンなしでは管理HTMLと管理WSSへ到達できない。
-- Worker assetsとWorker WSSは10分接続tokenを持つ信頼済み参加者だけに開き、認証後の明示参加で暗号化セッションとPING死活監視が成立する。
+- Worker browser assetsはGitHub Pagesから配信し、Worker WSSだけを10分接続tokenで認証する。認証後の明示参加で暗号化セッションとPING死活監視が成立する。
 - 同一PCの複数WorkerはモデルdownloadだけをService Workerで束ね、各タブのmodel load/WebGPU推論は独立する。
 - localhost専用reset secretでWorker accessを即時失効でき、接続済みWorker・旧token・旧Cookieがその場で無効になる。
 - Worker脱落時にジョブが別Workerへ再割当される。

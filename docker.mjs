@@ -255,7 +255,6 @@ function checkReleaseFiles(problems) {
     "web/index.html",
     "web/server-ui.css",
     "web/server-ui.js",
-    "engine/index.html",
   ];
   const requiredDirectories = ["data"];
   const missing = [];

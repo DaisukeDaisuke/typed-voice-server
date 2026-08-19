@@ -15,74 +15,26 @@ jobs:
       - uses: actions/checkout@v7
       - name: Initialize typed-voice submodule only
         run: git submodule update --init --recursive --depth 1 typed-voice
-      - name: Add trusted worker browser entry
-        run: |
-          cp engine-source/server-engine.html typed-voice/server-engine.html
-          cp engine-source/server-engine.js typed-voice/src/server-engine.js
-          if git -C typed-voice apply --check ../engine-source/vite-server-entry.patch; then
-            git -C typed-voice apply ../engine-source/vite-server-entry.patch
-          elif ! grep -Fq 'serverEngine: resolve(rootDirectory, "server-engine.html")' typed-voice/vite.config.js; then
-            echo 'Unable to apply trusted Worker Vite entry patch.' >&2
-            exit 1
-          fi
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: typed-voice/package-lock.json
       - name: Test Node server core
         run: node --test test/*.test.mjs
-      - name: Install typed-voice dependencies
-        working-directory: typed-voice
-        run: npm ci
-      - name: Set up Kanalizer Rust toolchain
-        run: |
-          rustup toolchain install 1.85.0 --profile minimal
-          rustup target add wasm32-unknown-unknown --toolchain 1.85.0
-          mkdir -p "$RUNNER_TEMP/wasm-pack-bin"
-          curl -L --fail --retry 3 \
-            "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-x86_64-unknown-linux-musl.tar.gz" \
-            -o "$RUNNER_TEMP/wasm-pack.tar.gz"
-          tar -xzf "$RUNNER_TEMP/wasm-pack.tar.gz" -C "$RUNNER_TEMP"
-          install \
-            "$RUNNER_TEMP/wasm-pack-v0.15.0-x86_64-unknown-linux-musl/wasm-pack" \
-            "$RUNNER_TEMP/wasm-pack-bin/wasm-pack"
-          echo "$RUNNER_TEMP/wasm-pack-bin" >> "$GITHUB_PATH"
-      - name: Build patched Kanalizer browser WASM on CPU
-        working-directory: typed-voice
-        run: npm run build:kanalizer-wasm
-      - name: Build Kanalizer v3 dictionary on CPU
-        working-directory: typed-voice
-        env:
-          KANALIZER_DATASET_REVISION: 21fc9ccf25d3b18030d3e0db3bf5994229fae697
-        run: |
-          curl -L --fail --retry 3 \
-            "https://huggingface.co/datasets/VOICEVOX/kanalizer-dataset/resolve/${KANALIZER_DATASET_REVISION}/dataset/dataset.jsonl" \
-            -o "$RUNNER_TEMP/kanalizer-dataset-v3.jsonl"
-          node scripts/build-kanalizer-dictionary.mjs \
-            "$RUNNER_TEMP/kanalizer-dataset-v3.jsonl" \
-            src/kanalizer-dictionary
-      - name: Test and build typed-voice browser assets
-        working-directory: typed-voice
-        run: |
-          npm test
-          npm run build
       - name: Normalize Server.cmd to Windows CRLF
         run: |
           sed -i 's/\r$//' Server.cmd
           sed -i 's/$/\r/' Server.cmd
       - name: Assemble local release artifact
         run: |
-          mkdir -p dist/typed-voice-server/engine
+          mkdir -p dist/typed-voice-server
           cp server-main.mjs docker.mjs Server.cmd package.json README.md INSTALL.md SPECIFICATION.md LICENSE dist/typed-voice-server/
           cp -R server admin worker web docs data dist/typed-voice-server/
-          cp -R typed-voice/dist/. dist/typed-voice-server/engine/
           cp typed-voice/THIRD_PARTY_NOTICES.md dist/THIRD_PARTY_NOTICES.md
           cat > dist/RELEASE_NOTES.md <<'EOF'
           CI-built typed-voice-server runtime.
 
-          The archive contains prebuilt browser assets. Double-click Server.cmd on Windows to verify runtime requirements and start the server.
-          Trusted browser workers join through token-gated /worker/ and are not started by the Node.js server.
+          Browser worker assets are served by the typed-voice GitHub Pages deployment and are not bundled into this archive. Double-click Server.cmd on Windows to verify runtime requirements and start the server.
+          Trusted browser workers authenticate through the local Worker login URL, then run the GitHub Pages worker.html against the server's public WSS endpoint.
           Node.js 22.13 through 24.x, Codex CLI with the Windows sandbox setup, and cloudflared are runtime requirements for the default Windows launch path.
           EOF
           cd dist
