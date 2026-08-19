@@ -23,7 +23,7 @@ if ! command -v unzip >/dev/null 2>&1 && ! command -v 7z >/dev/null 2>&1; then
   sudo apt-get install -y --no-install-recommends unzip
 fi
 curl -fsSL https://deno.land/install.sh \
-  | sudo DENO_INSTALL=/usr/local sh -s "v${DENO_VERSION}" --no-modify-path
+  | sudo DENO_INSTALL=/usr/local sh -s "v${DENO_VERSION}" --yes --no-modify-path
 deno --version | head -n 1
 
 printf '\n[typed-voice-server] Verifying Codex Linux sandbox...\n'
