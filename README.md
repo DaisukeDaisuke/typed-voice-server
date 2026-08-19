@@ -11,7 +11,9 @@ node server-main.mjs
 ```
 起動後は、ターミナルに表示される案内からAdmin、Trusted Worker、Remote接続を使います。
 > [!NOTE]
-> サーバー本体は通常ユーザー権限で実行します。管理者として `server-main.mjs` を起動する必要はありません。
+> サーバー本体は通常ユーザー権限で実行します。<br>
+> 管理者として `server-main.mjs` を起動する必要はありません。
+
 ## インストール
 [Windows向けインストール手順](INSTALL.md)
 ## 詳細仕様
