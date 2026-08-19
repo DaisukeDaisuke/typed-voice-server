@@ -70,15 +70,15 @@ jobs:
       - name: Assemble local release artifact
         run: |
           mkdir -p dist/typed-voice-server/engine
-          cp server-main.mjs package.json README.md LICENSE dist/typed-voice-server/
-          cp -R server worker web docs dist/typed-voice-server/
+          cp server-main.mjs docker.mjs Server.cmd package.json README.md INSTALL.md SPECIFICATION.md LICENSE dist/typed-voice-server/
+          cp -R server admin worker web docs dist/typed-voice-server/
           cp -R typed-voice/dist/. dist/typed-voice-server/engine/
           cat > dist/RELEASE_NOTES.md <<'EOF'
           CI-built typed-voice-server runtime.
 
-          The archive contains prebuilt browser assets. Runtime npm installation is not required.
+          The archive contains prebuilt browser assets. Double-click Server.cmd on Windows to verify runtime requirements and start the server.
           Trusted browser workers join through token-gated /worker/ and are not started by the Node.js server.
-          Python, Codex and Codespaces are not runtime requirements.
+          Node.js 22.13 through 24.x, Codex CLI with the Windows sandbox setup, and cloudflared are runtime requirements for the default Windows launch path.
           EOF
           cd dist
           zip -r typed-voice-server.zip typed-voice-server

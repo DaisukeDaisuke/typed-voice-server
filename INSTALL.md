@@ -1,7 +1,7 @@
 # インストール
 この手順はWindows向けです。上から順番に1つずつ実行します。
 > [!IMPORTANT]
-> `server-main.mjs` 自体は管理者として実行しません。通常ユーザーのPowerShellまたはWindows Terminalを使って準備してください。
+> `Server.cmd` や `server-main.mjs` 自体は管理者として実行しません。通常ユーザーのPowerShellまたはWindows Terminalを使って準備してください。
 ## 1. typed-voice-serverの最新版をダウンロードする
 次のリンクを開いて、`typed-voice-server.zip`をダウンロードしてください。
 
@@ -20,7 +20,7 @@
 
 <img width="476" height="589" alt="image" src="https://github.com/user-attachments/assets/d5e830e0-a7b1-4059-8c52-705ceb07ce87" />
 
-展開先は、あとで見つけやすい場所を選んでください。展開が終わったら、`server-main.mjs`が入っている展開先フォルダーを開いておきます。
+展開先は、あとで見つけやすい場所を選んでください。展開が終わったら、`Server.cmd`と`server-main.mjs`が入っている展開先フォルダーを開いておきます。
 
 <img width="1143" height="444" alt="image" src="https://github.com/user-attachments/assets/a61f4915-4d43-4371-9edb-8a8bc4e4e42e" />
 
@@ -73,7 +73,16 @@ codex sandbox setup --elevated --current-user
 > 表示された内容を確認して承認してください。これはCodex sandboxを準備するための一度きりの昇格です。
 
 > [!CAUTION]
-> セットアップ完了後も、`server-main.mjs` や普段の開発用PowerShellを管理者として起動しないでください。<br>
+> セットアップ完了後も、`Server.cmd`、`server-main.mjs`、普段の開発用PowerShellを管理者として起動しないでください。<br>
 > サーバーは通常ユーザー権限で動かします。
+## 8. Server.cmdをダブルクリックして起動する
+展開した`typed-voice-server`フォルダーへ戻り、`Server.cmd`をダブルクリックしてください。
+
+`Server.cmd`は最初に起動環境を確認します。Node.js、cloudflared、Codex CLI、Codex sandbox、配布ファイルのどれかが足りない場合や、対応していないバージョンの場合は、不足している内容と必要な手順を日本語で表示し、サーバーを起動せず停止します。
+
+> [!TIP]
+> エラーが表示された場合は、画面に表示された不足項目を確認してください。エラー時は画面がすぐ閉じないよう、キー入力を待ってから終了します。
+
+必要なものがすべて揃っていれば、そのまま`typed-voice-server`が起動します。
 ## インストール完了
-ここまで完了したら、[README.md](README.md) に戻ってサーバーを起動してください。
+ここまで完了したら、以後は展開したフォルダーの`Server.cmd`をダブルクリックするだけで起動できます。

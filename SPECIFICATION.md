@@ -32,7 +32,9 @@ Quick TunnelではRemote用URLだけをpairing endpointに使用し、Admin・Tr
 ## モデルとWorker
 管理画面で`fp32`、`fp16`、`mobile-int8`、`mobile-int4`を選択できます。<br>選択は`data/settings.json`へ保存します。<br>変更時は参加中Workerへ新しいCONFIGを送り、各Workerが自分のブラウザ内でモデルを再準備します。<br>合成文章は実際に処理を担当するTrusted Workerへ送信されるため、Worker tokenを渡した参加者は入力内容を扱える信頼主体として扱います。<br>
 ## 実行
-Release artifactはビルド済みWorker browser assetsを`engine/`へ含みます。<br>実行にはNode.js 22以上が必要です。<br>
+Release artifactはビルド済みWorker browser assetsを`engine/`へ含みます。<br>実行にはNode.js 22.13以上、25未満が必要です。<br>
+Windowsでの通常起動はRelease artifact内の`Server.cmd`をダブルクリックします。<br>`Server.cmd`はUTF-8 consoleへ切り替え、`docker.mjs`でNode.js、cloudflared、Codex CLI、Codex sandbox setup、配布ファイルを事前確認し、失敗時は`server-main.mjs`を起動しません。<br>
+直接のNode.js起動は開発・高度なオプション指定用です。<br>
 ```text
 node server-main.mjs
 ```
