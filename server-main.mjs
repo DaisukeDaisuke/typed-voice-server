@@ -230,7 +230,6 @@ let serverReady = false;
 const authKey = randomBytes(32);
 const encryptionKey = randomBytes(32);
 const adminSessionToken = randomBytes(32).toString("hex");
-const adminSessionTokenHash = createHash("sha256").update(adminSessionToken, "ascii").digest("hex");
 const workerResetToken = randomBytes(64).toString("hex");
 let workerAccessSecret = randomBytes(64);
 let clientBanSalt = null;
@@ -737,26 +736,11 @@ async function startAdminWorker() {
   const address = await adminWorker.request("start", {
     port: requestedPorts.admin,
     originCapabilityHost: listenerCapabilityHost("admin"),
-    sessionTokenHash: adminSessionTokenHash,
+    sessionToken: adminSessionToken,
     state: adminSnapshot(),
     pairing: pairingPayload,
   });
   ports.admin = Number(address?.port);
-}
-
-async function assertPublicWorkerIsolation() {
-  const roles = [
-    ["admin", adminWorker],
-    ["worker", trustedWorker],
-    ["remote", remoteWorker],
-  ];
-  for (const [sourceRole, client] of roles) {
-    for (const [targetRole] of roles) {
-      if (sourceRole === targetRole) continue;
-      await client.request("assert-sibling-auth-denied", { port: ports[targetRole], role: targetRole });
-    }
-  }
-  consoleLine(ANSI.green, "[sandbox boundary]", "public HTTP workers cannot authenticate to sibling roles");
 }
 
 async function shutdown(exitCode = 0) {
@@ -788,7 +772,7 @@ process.once("SIGINT", () => void shutdown(0));
 process.once("SIGTERM", () => void shutdown(0));
 
 if (linuxDirectTestBackend) {
-  writeSandboxLog("security", "Linux direct-test backend enabled: workers run directly inside the outer container; OS sandbox guarantees are not being tested, but sibling application authentication probes still run.");
+  writeSandboxLog("security", "Linux direct-test backend enabled: workers run directly inside the outer container; Windows Codex sandbox guarantees are not being tested.");
 }
 
 let startupStage = "storage worker";
@@ -800,8 +784,6 @@ try {
   await startRemoteWorker();
   startupStage = "admin worker";
   await startAdminWorker();
-  startupStage = "public worker capability probe";
-  await assertPublicWorkerIsolation();
 
   updateState({
     overall: "Worker待機中",

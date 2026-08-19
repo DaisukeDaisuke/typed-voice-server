@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { BrowserWorkerPool } from "../server/engine-pool.mjs";
 import { OrchestratorHttpServer } from "../server/orchestrator-http.mjs";
 import { createFdStdioPeer } from "../server/stdio-peer.mjs";
-import { assertSiblingRoleAuthenticationDenied } from "../server/boundary-probe.mjs";
 import { verifyWorkerAccessToken } from "../server/worker-access-token.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -118,7 +117,6 @@ const peer = createFdStdioPeer({
       const status = await pool.reconfigure(params?.modelProfile);
       return status;
     }
-    if (method === "assert-sibling-auth-denied") return assertSiblingRoleAuthenticationDenied(params?.port, params?.role);
     if (method === "set-public-origin") {
       publicOrigin = params?.origin == null ? null : String(params.origin);
       return true;

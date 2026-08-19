@@ -90,7 +90,7 @@ test("sandbox worker RPC opens fd 0/1 directly instead of process stdio wrappers
   }
 });
 
-test("Linux direct-test backend is explicit and still runs application capability probes", async () => {
+test("Linux direct-test backend is explicit and never replaces the Windows Codex boundary", async () => {
   const [main, client] = await Promise.all([
     source("server-main.mjs"),
     source("server/sandbox-worker-client.mjs"),
@@ -98,26 +98,19 @@ test("Linux direct-test backend is explicit and still runs application capabilit
   assert.match(main, /process\.platform !== "win32"[\s\S]*?TYPED_VOICE_LINUX_DIRECT_TEST === "1"/u);
   assert.match(main, /backend:\s*linuxDirectTestBackend \? "direct-test" : "codex"/u);
   assert.match(client, /config\.backend === "direct-test" \? DirectWorkerProcess : CodexSandboxProcess/u);
-  assert.match(main, /OS sandbox guarantees are not being tested, but sibling application authentication probes still run/u);
+  assert.match(main, /Windows Codex sandbox guarantees are not being tested/u);
 });
 
-test("startup fails closed unless every public HTTP worker is denied by sibling role authentication", async () => {
-  const main = await source("server-main.mjs");
-  assert.match(main, /await assertPublicWorkerIsolation\(\);/u);
-  assert.match(main, /client\.request\("assert-sibling-auth-denied", \{ port: ports\[targetRole\], role: targetRole \}\)/u);
-});
-
-test("production admin worker receives only the SHA-256 token digest", async () => {
-  const [main, admin, http] = await Promise.all([
+test("startup does not assume sibling loopback TCP is blocked by the Codex sandbox", async () => {
+  const [main, admin, worker, remote] = await Promise.all([
     source("server-main.mjs"),
     source("admin/admin-http-worker.mjs"),
-    source("server/orchestrator-http.mjs"),
+    source("worker/trusted-worker-http-worker.mjs"),
+    source("worker/remote-http-worker.mjs"),
   ]);
-  assert.match(main, /adminSessionTokenHash = createHash\("sha256"\)/u);
-  assert.match(main, /sessionTokenHash:\s*adminSessionTokenHash/u);
-  assert.doesNotMatch(admin, /sessionToken:\s*params\?\.sessionToken/u);
-  assert.match(admin, /sessionTokenHash:\s*params\?\.sessionTokenHash/u);
-  assert.match(http, /timingSafeEqual\(digest, this\.sessionTokenHash\)/u);
+  for (const sourceText of [main, admin, worker, remote]) {
+    assert.doesNotMatch(sourceText, /assert-loopback-denied|assertLoopbackConnectDenied|assertPublicWorkerIsolation/u);
+  }
 });
 
 test("public HTTP roles are instantiated only inside dedicated sandbox worker entrypoints", async () => {

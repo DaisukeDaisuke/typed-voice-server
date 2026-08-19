@@ -2,7 +2,6 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OrchestratorHttpServer } from "../server/orchestrator-http.mjs";
 import { createFdStdioPeer } from "../server/stdio-peer.mjs";
-import { assertSiblingRoleAuthenticationDenied } from "../server/boundary-probe.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const webRoot = join(projectRoot, "web");
@@ -24,7 +23,7 @@ const peer = createFdStdioPeer({
         port: Number(params?.port ?? 0),
         roles: ["admin"],
         originCapabilityHost: params?.originCapabilityHost,
-        sessionTokenHash: params?.sessionTokenHash,
+        sessionToken: params?.sessionToken,
         webRoot,
         stateProvider: () => state,
         pairingProvider: () => pairing,
@@ -62,7 +61,6 @@ const peer = createFdStdioPeer({
       server?.broadcastState();
       return true;
     }
-    if (method === "assert-sibling-auth-denied") return assertSiblingRoleAuthenticationDenied(params?.port, params?.role);
     if (method === "set-pairing") {
       pairing = params?.pairing && typeof params.pairing === "object" ? params.pairing : null;
       server?.broadcastPairing();
