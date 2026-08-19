@@ -44,6 +44,29 @@ test("Admin and Trusted Worker Quick Tunnels are explicit opt-in while Remote re
   assert.match(main, /\(tunnel disabled\)/u);
 });
 
+test("startup URLs are grouped into one colorful ready tree and worker token rotation reprints it", async () => {
+  const main = await source("server-main.mjs");
+  for (const label of [
+    "server is ready!",
+    "Worker URL",
+    "Remote URL",
+    "Public WSS",
+    "Admin URL",
+    "Worker Login",
+    "worker session token file",
+    "Remote Login Key",
+  ]) {
+    assert.match(main, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "u"));
+  }
+  assert.match(main, /index === rows\.length - 1 \? "└──" : "├──"/u);
+  assert.match(main, /serverReady = true;\s*printReadyTree\(\);/u);
+  assert.match(main, /async function refreshWorkerSessionToken\(\)[\s\S]*?printReadyTree\(\);/u);
+  assert.match(main, /async function resetWorkerAccess\(\)[\s\S]*?printReadyTree\(\);/u);
+  assert.doesNotMatch(main, /\[quick tunnel /u);
+  assert.doesNotMatch(main, /\[public WSS\]/u);
+  assert.match(main, /onLog\(\{ stream, text \}\) \{\s*writeSandboxLog\(`cloudflared:\$\{role\}:\$\{stream\}`, text\);/u);
+});
+
 test("public workers deny-read data while storage uses the distinct unelevated identity", async () => {
   const main = await source("server-main.mjs");
   assert.match(main, /sandboxConfig\("storage-worker"[\s\S]*?sandbox:\s*"unelevated"/u);

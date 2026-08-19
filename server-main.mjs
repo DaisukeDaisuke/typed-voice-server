@@ -99,6 +99,7 @@ const linuxDirectTestBackend = process.platform !== "win32"
 
 const ANSI = Object.freeze({
   reset: "\x1b[0m",
+  bold: "\x1b[1m",
   green: "\x1b[32m",
   yellow: "\x1b[33m",
   cyan: "\x1b[36m",
@@ -212,10 +213,7 @@ const state = {
 let workerStatus = { engines: [], queued: 0, running: 0, profile: state.modelProfile };
 let pairingPayload = null;
 let pairingFileResolvedPath = null;
-let adminSessionTokenResolvedPath = null;
 let workerSessionTokenResolvedPath = null;
-let workerResetTokenResolvedPath = null;
-let workerPortResolvedPath = null;
 
 let storageWorker = null;
 let adminWorker = null;
@@ -226,6 +224,7 @@ const historySubscriptions = new Map();
 let workerTokenTimer = null;
 let workerResetPromise = null;
 let shuttingDown = false;
+let serverReady = false;
 
 const authKey = randomBytes(32);
 const encryptionKey = randomBytes(32);
@@ -396,20 +395,45 @@ function loginUrl(role, pathname, token) {
   return url.href;
 }
 
-function printAdminLoginUrl() {
-  const url = loginUrl("admin", "admin/login", adminSessionToken);
-  if (!url) return;
-  const disabled = !publicOrigins.admin && !quickTunnelEnabledFor("admin") && configuredPublicOrigin("admin") === undefined;
-  const suffix = disabled ? ` ${ANSI.yellow}(tunnel disabled)${ANSI.reset}` : "";
-  consoleLine(ANSI.magenta, "[admin login]", `${ANSI.magenta}${terminalHyperlink(url, url)}${ANSI.reset}${suffix}`);
+function roleUrl(role, pathname) {
+  const origin = browserOrigin(role);
+  return origin ? new URL(pathname, `${origin}/`).href : null;
 }
 
-function printWorkerLoginUrl(token) {
-  const url = loginUrl("worker", "worker/login", token);
-  if (!url) return;
-  const disabled = !publicOrigins.worker && !quickTunnelEnabledFor("worker") && configuredPublicOrigin("worker") === undefined;
+function readyTreeLine(branch, color, label, value) {
+  process.stdout.write(`${color}${branch}${ANSI.reset} ${ANSI.bold}${color}${label}${ANSI.reset}: ${color}${value}${ANSI.reset}\n`);
+}
+
+function readyUrl(role, url) {
+  if (!url) return null;
+  const disabled = !publicOrigins[role]
+    && !quickTunnelEnabledFor(role)
+    && configuredPublicOrigin(role) === undefined;
   const suffix = disabled ? ` ${ANSI.yellow}(tunnel disabled)${ANSI.reset}` : "";
-  consoleLine(ANSI.cyan, "[worker login]", `${ANSI.cyan}${terminalHyperlink(url, url)}${ANSI.reset}${suffix}`);
+  return `${terminalHyperlink(url, url)}${suffix}`;
+}
+
+function printReadyTree() {
+  if (!serverReady || shuttingDown) return;
+  const workerToken = currentWorkerAccessToken(workerAccessSecret).token;
+  const workerUrl = loginUrl("worker", "worker/login", workerToken);
+  const workerLogin = roleUrl("worker", "worker/login");
+  const remoteUrl = browserOrigin("remote");
+  const adminUrl = loginUrl("admin", "admin/login", adminSessionToken);
+  const publicWss = pairingPayload?.u ? String(pairingPayload.u) : null;
+  const rows = [
+    [ANSI.cyan, "Worker URL", readyUrl("worker", workerUrl)],
+    [ANSI.green, "Remote URL", readyUrl("remote", remoteUrl)],
+    [ANSI.green, "Public WSS", publicWss ? terminalHyperlink(publicWss, publicWss) : null],
+    [ANSI.magenta, "Admin URL", readyUrl("admin", adminUrl)],
+    [ANSI.cyan, "Worker Login", readyUrl("worker", workerLogin)],
+    [ANSI.yellow, "worker session token file", workerSessionTokenResolvedPath],
+    [ANSI.yellow, "Remote Login Key", pairingFileResolvedPath],
+  ].filter(([, , value]) => value);
+  process.stdout.write(`\n${ANSI.bold}${ANSI.green}server is ready!${ANSI.reset}\n`);
+  rows.forEach(([color, label, value], index) => {
+    readyTreeLine(index === rows.length - 1 ? "└──" : "├──", color, label, value);
+  });
 }
 
 function pushAdminState() {
@@ -441,9 +465,7 @@ function scheduleWorkerTokenRefresh(delayMs) {
 async function refreshWorkerSessionToken() {
   const current = currentWorkerAccessToken(workerAccessSecret);
   workerSessionTokenResolvedPath = sanitizeDataPath(await storageWorker.request("write-worker-token", { token: current.token }));
-  consoleLine(ANSI.yellow, "[worker session token file]", workerSessionTokenResolvedPath);
-  consoleLine(ANSI.dim, "[worker token expires]", new Date(current.expiresAt).toISOString());
-  printWorkerLoginUrl(current.token);
+  printReadyTree();
   if (!shuttingDown) scheduleWorkerTokenRefresh(millisecondsUntilWorkerTokenRotation() + 25);
 }
 
@@ -458,9 +480,7 @@ async function resetWorkerAccess() {
     clearTimeout(workerTokenTimer);
     workerTokenTimer = null;
     consoleLine(ANSI.yellow, "[worker access reset]", new Date().toISOString());
-    consoleLine(ANSI.yellow, "[worker session token file]", workerSessionTokenResolvedPath);
-    consoleLine(ANSI.dim, "[worker token expires]", new Date(current.expiresAt).toISOString());
-    printWorkerLoginUrl(current.token);
+    printReadyTree();
     if (!shuttingDown) scheduleWorkerTokenRefresh(millisecondsUntilWorkerTokenRotation() + 25);
     return { workerAccessSecret: nextSecret.toString("base64url") };
   })();
@@ -515,10 +535,8 @@ async function setRolePublicOrigin(role, value) {
   publicOrigins[role] = origin;
   if (role === "admin") {
     await adminWorker.request("set-public-origin", { origin });
-    printAdminLoginUrl();
   } else if (role === "worker") {
     await trustedWorker.request("set-public-origin", { origin });
-    printWorkerLoginUrl(currentWorkerAccessToken(workerAccessSecret).token);
   } else if (role === "remote") {
     const publicUrl = new URL("remote", `${origin}/`);
     publicUrl.protocol = "wss:";
@@ -534,8 +552,6 @@ async function setRolePublicOrigin(role, value) {
       pairingEndpoint: publicUrl.hostname,
     });
     if (adminWorker) await adminWorker.request("set-pairing", { pairing: pairingPayload });
-    consoleLine(ANSI.yellow, "[public WSS]", publicUrl.href);
-    consoleLine(ANSI.green, "[pairing file]", pairingFileResolvedPath);
   }
   const readyOrigins = Object.entries(publicOrigins)
     .filter(([, item]) => item)
@@ -559,7 +575,6 @@ async function startTunnel(role) {
   });
   tunnels.set(role, tunnel);
   const publicOrigin = await tunnel.start();
-  consoleLine(ANSI.cyan, `[quick tunnel ${role}]`, publicOrigin);
   return setRolePublicOrigin(role, publicOrigin);
 }
 
@@ -580,8 +595,8 @@ async function startStorageWorker() {
   state.modelProfile = requestedProfile ?? stored.modelProfile;
   state.clientBans = stored.clientBans;
   if (requestedProfile) await storageWorker.request("set-model", { modelProfile: requestedProfile });
-  adminSessionTokenResolvedPath = sanitizeDataPath(await storageWorker.request("write-admin-token", { token: adminSessionToken }));
-  workerResetTokenResolvedPath = sanitizeDataPath(await storageWorker.request("write-worker-reset-token", { token: workerResetToken }));
+  sanitizeDataPath(await storageWorker.request("write-admin-token", { token: adminSessionToken }));
+  sanitizeDataPath(await storageWorker.request("write-worker-reset-token", { token: workerResetToken }));
   await refreshWorkerSessionToken();
 }
 
@@ -629,7 +644,7 @@ async function startTrustedWorker() {
   });
   ports.worker = Number(started?.address?.port);
   workerStatus = sanitizeWorkerStatus(started?.status);
-  workerPortResolvedPath = sanitizeDataPath(await storageWorker.request("write-worker-port", { port: ports.worker }));
+  sanitizeDataPath(await storageWorker.request("write-worker-port", { port: ports.worker }));
 }
 
 async function startRemoteWorker() {
@@ -795,18 +810,6 @@ try {
     model: `選択: ${state.modelProfile}`,
   });
 
-  consoleLine(ANSI.green, "[worker listener]", `127.0.0.1:${ports.worker}`);
-  consoleLine(ANSI.green, "[remote listener]", `127.0.0.1:${ports.remote}`);
-  consoleLine(ANSI.green, "[admin listener]", `127.0.0.1:${ports.admin}`);
-  consoleLine(ANSI.dim, "[worker listen port file]", workerPortResolvedPath);
-  consoleLine(ANSI.yellow, "[admin session token file]", adminSessionTokenResolvedPath);
-  consoleLine(ANSI.yellow, "[worker reset token file]", workerResetTokenResolvedPath);
-  consoleLine(ANSI.dim, "[worker reset endpoint]", `POST http://127.0.0.1:${ports.worker}/worker/reset`);
-  if (!quickTunnelEnabledFor("admin") && configuredPublicOrigin("admin") === undefined) printAdminLoginUrl();
-  if (!quickTunnelEnabledFor("worker") && configuredPublicOrigin("worker") === undefined) {
-    printWorkerLoginUrl(currentWorkerAccessToken(workerAccessSecret).token);
-  }
-
   if (parsed.values["admin-public-origin"]) await setRolePublicOrigin("admin", parsed.values["admin-public-origin"]);
   if (parsed.values["worker-public-origin"]) await setRolePublicOrigin("worker", parsed.values["worker-public-origin"]);
   if (parsed.values["public-origin"]) await setRolePublicOrigin("remote", parsed.values["public-origin"]);
@@ -821,6 +824,8 @@ try {
     updateState({ tunnel: "Quick Tunnel無効", pairingReady: false });
   }
   recomputeOverall();
+  serverReady = true;
+  printReadyTree();
 } catch (error) {
   writeSandboxLog("startup", `stage=${startupStage}`);
   writeSandboxLog("startup", error instanceof Error ? error.stack ?? error.message : String(error));
