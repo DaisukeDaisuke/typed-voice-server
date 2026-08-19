@@ -2,8 +2,11 @@
 `typed-voice-server` は、[typed-voice](https://github.com/DaisukeDaisuke/typed-voice) の音声生成を、リモートパソコンで行い、マイニングプールのようにボランティアを募れるサーバープロジェクトです。<br>
 PC上でサーバーを起動し、ブラウザのTrusted Workerへ音声生成を任せながら、Remoteクライアントから読み上げを利用できます。
 ## typed-voiceとの連携
-`typed-voice-server` と `typed-voice` は密接に連携しています。サーバーが用意するQRコードを読み取るか、接続鍵ファイルを `typed-voice` に渡すことで、接続先などの情報をまとめて受け渡せます。接続情報を手入力する必要はありません。
-QRコードと接続鍵ファイルは、同じサーバーへ接続するための2つの受け渡し方法として利用できます。スマートフォンやタブレットではQRコード、ファイルを受け渡せる環境では接続鍵ファイルを使えます。
+`typed-voice-server` と `typed-voice` は密接に連携しています。<br>
+サーバーが用意するQRコードを読み取るか、接続鍵ファイルを `typed-voice` に渡すことで、接続先などの情報をまとめて受け渡せます。<br>
+接続情報を手入力する必要はありません。<br>
+QRコードと接続鍵ファイルは、同じサーバーへ接続するための2つの受け渡し方法として利用できます。<br>
+スマートフォンやタブレットではQRコード、ファイルを受け渡せる環境では接続鍵ファイルを使えます。<br>
 ## はじめに
 Windowsで初めて使う場合は、まず [INSTALL.md](INSTALL.md) の手順に沿ってNode.js、cloudflared、Codex CLI、Codex sandboxを準備してください。<br>
 準備が終わったら、展開した `typed-voice-server` フォルダーにある **`Server.cmd` をダブルクリック**してください。
