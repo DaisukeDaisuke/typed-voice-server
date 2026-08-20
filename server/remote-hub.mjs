@@ -17,7 +17,6 @@ import { acceptWebSocketUpgrade } from "../worker/websocket.mjs";
 const MAX_TEXT_BYTES = 16 * 1024;
 const MAX_SYNC_TEXT_BYTES = MAX_TEXT_BYTES * 2 + 1024;
 const MAX_AUTHENTICATED_CLIENTS = 64;
-const MAX_UNAUTHENTICATED_CLIENTS = 32;
 const MAX_PENDING_PER_CLIENT = 3;
 const MAX_TOTAL_PENDING = MAX_AUTHENTICATED_CLIENTS * MAX_PENDING_PER_CLIENT;
 const REQUEST_BURST_WINDOW_MS = 10_000;
@@ -182,11 +181,6 @@ export class RemoteClientHub {
   }
 
   #attachClient(ws, firstPayload = null) {
-    const unauthenticatedCount = [...this.clients].filter((client) => !client.authenticated).length;
-    if (unauthenticatedCount >= MAX_UNAUTHENTICATED_CLIENTS) {
-      ws.close(1013);
-      return;
-    }
     const client = {
       ws,
       connectionId: randomId().toString(16).padStart(16, "0"),
