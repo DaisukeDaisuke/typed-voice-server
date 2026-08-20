@@ -323,11 +323,14 @@ export class RemoteClientHub {
     const clientToken = String(request?.clientToken ?? "");
     if (!CLIENT_TOKEN_PATTERN.test(clientToken)) throw new Error("invalid client token");
     const text = String(request?.text ?? "");
+    const speed = Number(request?.speed ?? 1);
+    if (!Number.isFinite(speed) || speed < 0.5 || speed > 2) throw new Error("invalid synthesis speed");
     if (Buffer.byteLength(text, "utf8") < 1 || Buffer.byteLength(text, "utf8") > MAX_TEXT_BYTES) throw new Error("invalid text length");
     const resumeKey = `${client.clientInstanceId}:${clientToken}`;
     const existing = this.pendingByClientToken.get(resumeKey);
     if (existing) {
       if (existing.text !== text
+        || existing.speed !== speed
         || existing.conversationId !== client.conversationId
         || existing.modelProfile !== this.modelProfile) {
         throw new Error("resume query mismatch");
@@ -338,13 +341,14 @@ export class RemoteClientHub {
       this.pendingByDeliveryId.set(existing.deliveryId.toString(), existing);
       return;
     }
-    this.#acceptText(client, frame, { text, clientToken, resumeKey, budgetConsumed: true });
+    this.#acceptText(client, frame, { text, speed, clientToken, resumeKey, budgetConsumed: true });
   }
 
   #acceptText(client, frame, sync = null) {
     if (!sync?.budgetConsumed && !this.#consumeRequestBudget(client)) return;
     if (!sync && (frame.payload.length < 1 || frame.payload.length > MAX_TEXT_BYTES)) throw new Error("invalid text length");
     const text = sync?.text ?? new TextDecoder("utf-8", { fatal: true }).decode(frame.payload);
+    const speed = sync?.speed ?? 1;
     if (!text.trim()) throw new Error("empty text");
     const ownedPending = [...this.pending.values()].filter((entry) => entry.client === client).length;
     if (ownedPending >= MAX_PENDING_PER_CLIENT) {
@@ -363,6 +367,7 @@ export class RemoteClientHub {
       rawId: frame.id,
       deliveryId: frame.id,
       text,
+      speed,
       client,
       conversationId: client.conversationId,
       modelProfile: this.modelProfile,
@@ -381,7 +386,7 @@ export class RemoteClientHub {
       at: entry.startedAt,
     });
     this.#emitStatus();
-    void this.pool.synthesize(id, text).then((audio) => {
+    void this.pool.synthesize(id, text, { speed }).then((audio) => {
       if (this.pending.get(id) !== entry) return;
       try {
         const owner = entry.client;

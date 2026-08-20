@@ -211,13 +211,15 @@ export class BrowserWorkerPool {
     };
   }
 
-  synthesize(id, text) {
+  synthesize(id, text, { speed = 1 } = {}) {
     const normalizedId = String(id ?? "");
     const normalizedText = String(text ?? "");
+    const normalizedSpeed = Number(speed);
     if (!normalizedId || !normalizedText.trim()) throw new Error("id and text are required");
+    if (!Number.isFinite(normalizedSpeed) || normalizedSpeed < 0.5 || normalizedSpeed > 2) throw new Error("invalid synthesis speed");
     if (this.synthesisConsumers.has(normalizedId)) throw new Error("duplicate synthesis id");
     const profile = this.reconfiguringProfile ?? this.profile;
-    const cacheKey = JSON.stringify([profile, normalizedText]);
+    const cacheKey = JSON.stringify([profile, normalizedText, normalizedSpeed]);
     const cached = this.synthesisCache.get(cacheKey);
     if (cached?.state === "ready") {
       return Promise.resolve(cached.result);
@@ -229,6 +231,7 @@ export class BrowserWorkerPool {
         state: "pending",
         profile,
         text: normalizedText,
+        speed: normalizedSpeed,
         cacheKey,
         cacheable: true,
         jobId,
@@ -236,7 +239,7 @@ export class BrowserWorkerPool {
         result: null,
       };
       this.synthesisCache.set(cacheKey, entry);
-      void this.#enqueueSynthesisJob(jobId, normalizedText).then((result) => {
+      void this.#enqueueSynthesisJob(jobId, normalizedText, normalizedSpeed).then((result) => {
         if (entry.state !== "pending") return;
         entry.state = "ready";
         entry.result = result;
@@ -320,12 +323,13 @@ export class BrowserWorkerPool {
     return true;
   }
 
-  #enqueueSynthesisJob(id, text) {
+  #enqueueSynthesisJob(id, text, speed) {
     if (this.jobs.has(id) || this.queue.some((job) => job.id === id)) throw new Error("duplicate synthesis id");
     return new Promise((resolvePromise, rejectPromise) => {
       const job = {
         id,
         text,
+        speed,
         resolve: resolvePromise,
         reject: rejectPromise,
         timer: null,
@@ -369,7 +373,7 @@ export class BrowserWorkerPool {
         this.synthesisCache.delete(key);
         continue;
       }
-      const nextKey = JSON.stringify([nextProfile, entry.text]);
+      const nextKey = JSON.stringify([nextProfile, entry.text, entry.speed]);
       this.synthesisCache.delete(key);
       entry.profile = nextProfile;
       entry.cacheKey = nextKey;
@@ -703,7 +707,7 @@ export class BrowserWorkerPool {
       job.audioChunks = [];
       job.receivedBytes = 0;
       this.jobs.set(job.id, worker);
-      void this.#sendWithPing(worker, EngineMessageType.SYNTH, Buffer.from(JSON.stringify({ id: job.id, text: job.text }), "utf8"))
+      void this.#sendWithPing(worker, EngineMessageType.SYNTH, Buffer.from(JSON.stringify({ id: job.id, text: job.text, speed: job.speed }), "utf8"))
         .catch(() => {
           if (worker.currentJob === job && !worker.ws.closed) worker.ws.close(1001);
         });

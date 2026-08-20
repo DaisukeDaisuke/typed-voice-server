@@ -117,11 +117,16 @@ const peer = createFdStdioPeer({
     if (type === "synthesize") {
       const id = validateJobId(payload?.id);
       const text = String(payload?.text ?? "");
+      const speed = Number(payload?.speed ?? 1);
       if (!text.trim() || Buffer.byteLength(text, "utf8") > 16 * 1024) {
         peer.event("synth-error", { id, error: "invalid synthesis text" });
         return;
       }
-      void pool.synthesize(id, text).then((audio) => streamSynthesisResult(id, audio)).catch((error) => {
+      if (!Number.isFinite(speed) || speed < 0.5 || speed > 2) {
+        peer.event("synth-error", { id, error: "invalid synthesis speed" });
+        return;
+      }
+      void pool.synthesize(id, text, { speed }).then((audio) => streamSynthesisResult(id, audio)).catch((error) => {
         peer.event("synth-error", {
           id,
           cancelled: error?.name === "AbortError",

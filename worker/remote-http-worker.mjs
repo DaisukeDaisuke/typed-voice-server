@@ -40,10 +40,12 @@ class ParentWorkerPool {
     this.workerStatus = status;
   }
 
-  synthesize(id, text) {
+  synthesize(id, text, { speed = 1 } = {}) {
     const normalizedId = validateJobId(id);
     const normalizedText = String(text ?? "");
+    const normalizedSpeed = Number(speed);
     if (!normalizedText.trim() || Buffer.byteLength(normalizedText, "utf8") > 16 * 1024) throw new Error("invalid synthesis text");
+    if (!Number.isFinite(normalizedSpeed) || normalizedSpeed < 0.5 || normalizedSpeed > 2) throw new Error("invalid synthesis speed");
     if (this.pending.has(normalizedId)) throw new Error("duplicate synthesis id");
     return new Promise((resolvePromise, rejectPromise) => {
       this.pending.set(normalizedId, {
@@ -53,7 +55,7 @@ class ParentWorkerPool {
         chunks: [],
         received: 0,
       });
-      peer.event("synth-request", { id: normalizedId, text: normalizedText });
+      peer.event("synth-request", { id: normalizedId, text: normalizedText, speed: normalizedSpeed });
     });
   }
 

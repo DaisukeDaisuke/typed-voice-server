@@ -22,6 +22,8 @@ jobs:
         run: node --test test/*.test.mjs
       - name: Test remote browser client core
         run: node --test typed-voice/test/remote-client-identity.test.js typed-voice/test/remote-wss-transport.test.js typed-voice/test/remote-voice-runtime.test.js
+      - name: Check remote worker entrypoints
+        run: node --check worker/remote-http-worker.mjs && node --check worker/trusted-worker-http-worker.mjs && node --check typed-voice/src/worker.js
       - name: Normalize Server.cmd to Windows CRLF
         run: |
           sed -i 's/\r$//' Server.cmd

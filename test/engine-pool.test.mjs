@@ -376,6 +376,7 @@ test("完全一致queryは生成中も完成後も1回のWorker合成へ束ね�
     const secondResult = pool.synthesize("request-b", "同じ文章");
     const request = await worker.nextSynthesis();
     assert.equal(request.text, "同じ文章");
+    assert.equal(request.speed, 1);
     assert.equal(pool.status().running, 1);
     assert.equal(pool.status().queued, 0);
 
@@ -388,6 +389,32 @@ test("完全一致queryは生成中も完成後も1回のWorker合成へ束ね�
     assert.deepEqual(cached, first);
     assert.equal(pool.status().running, 0);
     assert.equal(pool.status().queued, 0);
+  } finally {
+    worker.close();
+    await pool.close();
+    await new Promise((resolvePromise) => server.close(resolvePromise));
+  }
+});
+
+test("同じtextでもspeedが違えば別Worker合成として扱う", async () => {
+  const pool = new BrowserWorkerPool({ profile: "fp16", jobTimeoutMs: 5000 });
+  const server = await startPoolServer(pool);
+  const port = server.address().port;
+  const worker = new VolunteerClient(`ws://127.0.0.1:${port}/worker/ws`);
+  try {
+    await worker.startReady();
+    const firstResult = pool.synthesize("speed-a", "同じ文章", { speed: 1 });
+    const secondResult = pool.synthesize("speed-b", "同じ文章", { speed: 1.5 });
+    const firstRequest = await worker.nextSynthesis();
+    assert.equal(firstRequest.speed, 1);
+    worker.sendAudio(firstRequest.id, new Float32Array([0.1]));
+    await firstResult;
+
+    const secondRequest = await worker.nextSynthesis();
+    assert.equal(secondRequest.speed, 1.5);
+    assert.notEqual(secondRequest.id, firstRequest.id);
+    worker.sendAudio(secondRequest.id, new Float32Array([0.2]));
+    await secondResult;
   } finally {
     worker.close();
     await pool.close();
