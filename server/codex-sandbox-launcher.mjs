@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { lstat, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
+import { terminateProcessTree } from "./process-tree.mjs";
 
 const PERMISSION_PROFILE_ID = "typed_voice_server";
 const SANITIZED_CHILD_ENVIRONMENT_OVERRIDE = "shell_environment_policy={inherit='core',ignore_default_excludes=false,set={},experimental_use_profile=false}";
@@ -165,8 +166,11 @@ export class CodexSandboxProcess {
     this.closed = true;
     const child = this.child;
     this.child = null;
-    if (!child || child.exitCode !== null || child.signalCode !== null) return;
-    child.stdin?.end();
-    child.kill("SIGTERM");
+    if (!child) return;
+    try { child.stdin?.end(); } catch {}
+    await terminateProcessTree(child, {
+      env: this.env,
+      spawnFn: this.spawnFn,
+    });
   }
 }

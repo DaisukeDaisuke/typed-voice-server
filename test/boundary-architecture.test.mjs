@@ -68,6 +68,22 @@ test("startup URLs are grouped into one colorful ready tree and worker token rot
   assert.match(main, /onLog\(\{ stream, text \}\) \{\s*writeSandboxLog\(`cloudflared:\$\{role\}:\$\{stream\}`, text\);/u);
 });
 
+test("clean shutdown is reachable from Ctrl+C and non-empty terminal input and tears down process trees", async () => {
+  const [main, tunnel, launcher, tree] = await Promise.all([
+    source("server-main.mjs"),
+    source("server/quick-tunnel.mjs"),
+    source("server/codex-sandbox-launcher.mjs"),
+    source("server/process-tree.mjs"),
+  ]);
+  assert.match(main, /process\.stdin\.on\("data", acceptShutdownInput\)/u);
+  assert.match(main, /if \(!line\.trim\(\)\) continue;[\s\S]*?shutdown\(0, "stdin"\)/u);
+  assert.match(main, /process\.on\("SIGINT"[\s\S]*?shutdown\(0, "Ctrl\+C"\)/u);
+  assert.match(main, /Promise\.allSettled\(activeTunnels\.map\(\(tunnel\) => tunnel\.stop\(\)\)\)/u);
+  assert.match(tunnel, /terminateProcessTree\(child/u);
+  assert.match(launcher, /terminateProcessTree\(child/u);
+  assert.match(tree, /\["\/PID", String\(pid\), "\/T", "\/F"\]/u);
+});
+
 test("public workers deny-read data while storage uses the restricted elevated backend", async () => {
   const main = await source("server-main.mjs");
   assert.match(main, /sandboxConfig\("storage-worker"[\s\S]*?sandbox:\s*"elevated"/u);

@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname, resolve, win32 } from "node:path";
+import { terminateProcessTree } from "./process-tree.mjs";
 
 const TRY_CLOUDFLARE_URL_RE = /https:\/\/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.trycloudflare\.com\b/i;
 const ONLINE_WORKSPACE_PROFILE = "typed_voice_quick_tunnel";
@@ -201,18 +202,11 @@ export class QuickTunnelProcess {
     const child = this.child;
     this.child = null;
     this.publicOrigin = null;
-    if (!child || child.exitCode !== null || child.signalCode !== null) return;
-    await new Promise((resolvePromise) => {
-      const timer = setTimeout(() => {
-        child.kill("SIGKILL");
-        resolvePromise();
-      }, 3000);
-      timer.unref?.();
-      child.once("exit", () => {
-        clearTimeout(timer);
-        resolvePromise();
-      });
-      child.kill("SIGTERM");
+    if (!child) return;
+    await terminateProcessTree(child, {
+      platform: this.platform,
+      env: this.env,
+      spawnFn: this.spawnFn,
     });
   }
 }

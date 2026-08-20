@@ -223,7 +223,9 @@ const historySubscriptions = new Map();
 let workerTokenTimer = null;
 let workerResetPromise = null;
 let shuttingDown = false;
+let shutdownPromise = null;
 let serverReady = false;
+let shutdownInputBuffer = "";
 
 const authKey = randomBytes(32);
 const encryptionKey = randomBytes(32);
@@ -428,6 +430,7 @@ function printReadyTree() {
     [ANSI.cyan, "Worker Login", readyUrl("worker", workerLogin)],
     [ANSI.yellow, "worker session token file", workerSessionTokenResolvedPath],
     [ANSI.yellow, "Remote Login Key", pairingFileResolvedPath],
+    ...(process.stdin.isTTY ? [[ANSI.yellow, "Shutdown", "type anything + Enter (recommended), or Ctrl+C"]] : []),
   ].filter(([, , value]) => value);
   process.stdout.write(`\n${ANSI.bold}${ANSI.green}server is ready!${ANSI.reset}\n`);
   rows.forEach(([color, label, value], index) => {
@@ -750,33 +753,90 @@ async function startAdminWorker() {
   ports.admin = Number(address?.port);
 }
 
-async function shutdown(exitCode = 0) {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  clearTimeout(workerTokenTimer);
-  workerTokenTimer = null;
-  state.overall = "停止中";
-  for (const tunnel of tunnels.values()) await tunnel.stop().catch(() => {});
-  tunnels.clear();
-  await adminWorker?.request("close").catch(() => {});
-  await remoteWorker?.request("close").catch(() => {});
-  await trustedWorker?.request("close").catch(() => {});
-  await adminWorker?.close().catch(() => {});
-  await remoteWorker?.close().catch(() => {});
-  await trustedWorker?.close().catch(() => {});
-  adminWorker = null;
-  remoteWorker = null;
-  trustedWorker = null;
-  historySubscriptions.clear();
-  await storageWorker?.request("flush").catch(() => {});
-  await storageWorker?.request("remove-runtime-files").catch(() => {});
-  await storageWorker?.close().catch(() => {});
-  storageWorker = null;
-  process.exitCode = exitCode;
+async function bestEffortWithin(promise, timeoutMs = 750) {
+  let timer = null;
+  try {
+    await Promise.race([
+      Promise.resolve(promise).catch(() => {}),
+      new Promise((resolvePromise) => { timer = setTimeout(resolvePromise, timeoutMs); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
-process.once("SIGINT", () => void shutdown(0));
-process.once("SIGTERM", () => void shutdown(0));
+function stopShutdownInput() {
+  if (!process.stdin.isTTY) return;
+  process.stdin.off("data", acceptShutdownInput);
+  process.stdin.pause();
+}
+
+async function shutdown(exitCode = 0, reason = "shutdown") {
+  if (shutdownPromise) return shutdownPromise;
+  shuttingDown = true;
+  shutdownPromise = (async () => {
+    stopShutdownInput();
+    clearTimeout(workerTokenTimer);
+    workerTokenTimer = null;
+    state.overall = "停止中";
+    writeSandboxLog("shutdown", `${reason}: cleaning up tunnels and sandbox processes`);
+
+    const activeTunnels = [...tunnels.values()];
+    tunnels.clear();
+    await Promise.allSettled(activeTunnels.map((tunnel) => tunnel.stop()));
+
+    const httpWorkers = [adminWorker, remoteWorker, trustedWorker].filter(Boolean);
+    await Promise.allSettled(httpWorkers.map((worker) => bestEffortWithin(worker.request("close"))));
+    await Promise.allSettled(httpWorkers.map((worker) => worker.close()));
+    adminWorker = null;
+    remoteWorker = null;
+    trustedWorker = null;
+    historySubscriptions.clear();
+
+    if (storageWorker) {
+      await bestEffortWithin(storageWorker.request("flush"));
+      await bestEffortWithin(storageWorker.request("remove-runtime-files"));
+      await storageWorker.close().catch(() => {});
+      storageWorker = null;
+    }
+
+    writeSandboxLog("shutdown", "cleanup complete");
+    process.exitCode = exitCode;
+  })();
+  return shutdownPromise;
+}
+
+function acceptShutdownInput(chunk) {
+  if (shuttingDown) return;
+  shutdownInputBuffer += String(chunk);
+  for (;;) {
+    const newline = shutdownInputBuffer.search(/[\r\n]/u);
+    if (newline < 0) {
+      if (shutdownInputBuffer.length > 4096) shutdownInputBuffer = shutdownInputBuffer.slice(-4096);
+      return;
+    }
+    const line = shutdownInputBuffer.slice(0, newline);
+    shutdownInputBuffer = shutdownInputBuffer.slice(newline + 1).replace(/^\n/u, "");
+    if (!line.trim()) continue;
+    void shutdown(0, "stdin");
+    return;
+  }
+}
+
+if (process.stdin.isTTY) {
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", acceptShutdownInput);
+  process.stdin.resume();
+}
+
+process.on("SIGINT", () => {
+  if (shuttingDown) {
+    process.exit(130);
+    return;
+  }
+  void shutdown(0, "Ctrl+C");
+});
+process.once("SIGTERM", () => void shutdown(0, "SIGTERM"));
 
 if (linuxDirectTestBackend) {
   writeSandboxLog("security", "Linux direct-test backend enabled: workers run directly inside the outer container; Windows Codex sandbox guarantees are not being tested.");
