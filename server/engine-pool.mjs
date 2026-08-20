@@ -169,6 +169,7 @@ export class BrowserWorkerPool {
     this.queue = [];
     this.dispatchPaused = false;
     this.idleWaiters = new Set();
+    this.sessionTokens = new Set();
     this.closed = false;
   }
 
@@ -259,7 +260,11 @@ export class BrowserWorkerPool {
     for (const worker of this.workers.values()) {
       worker.info = null;
       if (worker.authenticated && !worker.ws.closed) {
-        sends.push(this.#sendWithPing(worker, EngineMessageType.CONFIG, Buffer.from(JSON.stringify({ profile: this.profile, reload: true }), "utf8")));
+        sends.push(this.#sendWithPing(worker, EngineMessageType.CONFIG, Buffer.from(JSON.stringify({
+          profile: this.profile,
+          reload: true,
+          sessionToken: worker.sessionToken,
+        }), "utf8")));
       }
     }
     await Promise.allSettled(sends);
@@ -281,10 +286,12 @@ export class BrowserWorkerPool {
       worker.ws.close(1001);
     }
     this.workers.clear();
+    this.sessionTokens.clear();
     this.#notify();
   }
 
   disconnectAll(code = 1008) {
+    this.sessionTokens.clear();
     for (const worker of this.workers.values()) {
       worker.authenticated = false;
       worker.info = null;
@@ -310,6 +317,7 @@ export class BrowserWorkerPool {
       pendingPing: null,
       sendChain: Promise.resolve(),
       session: null,
+      sessionToken: null,
       transcript: null,
       accessTokenValidator,
     };
@@ -381,12 +389,16 @@ export class BrowserWorkerPool {
     if (worker.handshakeStage === "hello") {
       const hello = decodeJson(payload, EngineMessageType.HELLO);
       if (hello.version !== 2) throw new Error("unsupported worker protocol version");
-      if (worker.accessTokenValidator) {
+      const suppliedSessionToken = String(hello.sessionToken ?? "");
+      const sessionTokenAccepted = /^[0-9a-f]{64}$/.test(suppliedSessionToken)
+        && this.sessionTokens.has(suppliedSessionToken);
+      if (!sessionTokenAccepted && worker.accessTokenValidator) {
         if (!worker.accessTokenValidator(String(hello.accessToken ?? ""))) {
           throw new Error("worker access token is invalid or expired");
         }
-        worker.accessTokenValidator = null;
       }
+      worker.accessTokenValidator = null;
+      worker.sessionToken = sessionTokenAccepted ? suppliedSessionToken : randomBytes(32).toString("hex");
       const clientPublicKey = decodeBase64Url(hello.publicKey, 65, "worker public key");
       const clientNonce = decodeBase64Url(hello.nonce, 32, "worker nonce");
       const ecdh = createECDH("prime256v1");
@@ -410,10 +422,15 @@ export class BrowserWorkerPool {
       const expected = proof(worker.session, "client", worker.transcript);
       if (!timingSafeEqual(supplied, expected)) throw new Error("worker session proof mismatch");
       worker.authenticated = true;
+      this.sessionTokens.add(worker.sessionToken);
       worker.handshakeStage = "ready";
       clearTimeout(worker.handshakeTimer);
       worker.handshakeTimer = null;
-      void this.#sendWithPing(worker, EngineMessageType.CONFIG, Buffer.from(JSON.stringify({ profile: this.profile, reload: false }), "utf8"))
+      void this.#sendWithPing(worker, EngineMessageType.CONFIG, Buffer.from(JSON.stringify({
+        profile: this.profile,
+        reload: false,
+        sessionToken: worker.sessionToken,
+      }), "utf8"))
         .catch(() => worker.ws.close(1001));
       this.#notify();
       return;

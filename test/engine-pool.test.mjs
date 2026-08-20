@@ -106,9 +106,10 @@ function encodeAudioChunk(id, chunk) {
 }
 
 class VolunteerClient {
-  constructor(url, accessToken = null) {
+  constructor(url, accessToken = null, sessionToken = null) {
     this.url = url;
     this.accessToken = accessToken;
+    this.sessionToken = sessionToken;
     this.socket = null;
     this.session = null;
     this.messages = [];
@@ -140,6 +141,7 @@ class VolunteerClient {
     socket.send(encodeJson(EngineMessageType.HELLO, {
       version: 2,
       ...(this.accessToken ? { accessToken: this.accessToken } : {}),
+      ...(this.sessionToken ? { sessionToken: this.sessionToken } : {}),
       publicKey: ecdh.getPublicKey().toString("base64url"),
       nonce: clientNonce.toString("base64url"),
     }));
@@ -158,6 +160,8 @@ class VolunteerClient {
     assert.equal(config.type, EngineMessageType.CONFIG);
     const parsed = JSON.parse(config.payload.toString("utf8"));
     assert.equal(parsed.profile, "fp16");
+    assert.match(parsed.sessionToken, /^[0-9a-f]{64}$/);
+    this.sessionToken = parsed.sessionToken;
     this.#sendEncrypted(EngineMessageType.STATUS, Buffer.from(JSON.stringify({
       ready: true,
       profile: "fp16",
@@ -258,6 +262,39 @@ test("Trusted Workerは固定ページ経由では最初のHELLOで接続トー�
     assert.equal(pool.status().engines[0]?.authenticated, true);
   } finally {
     worker.close();
+    await pool.close();
+    await new Promise((resolvePromise) => server.close(resolvePromise));
+  }
+});
+
+test("Trusted Workerは暗号化後に受け取ったセッショントークンで再接続できる", async () => {
+  const expectedToken = "d".repeat(128);
+  let validationCount = 0;
+  const pool = new BrowserWorkerPool({ profile: "fp16", jobTimeoutMs: 5000 });
+  const server = await startPoolServer(pool, (token) => {
+    validationCount += 1;
+    return token === expectedToken;
+  });
+  const port = server.address().port;
+  const first = new VolunteerClient(`ws://127.0.0.1:${port}/worker/ws`, expectedToken);
+  let reconnected = null;
+  try {
+    await first.startReady();
+    const sessionToken = first.sessionToken;
+    first.close();
+
+    reconnected = new VolunteerClient(
+      `ws://127.0.0.1:${port}/worker/ws`,
+      "expired-access-token",
+      sessionToken,
+    );
+    await reconnected.startReady();
+    assert.equal(reconnected.sessionToken, sessionToken);
+    assert.equal(validationCount, 1);
+    assert.equal(pool.status().engines.some((engine) => engine.authenticated), true);
+  } finally {
+    first.close();
+    reconnected?.close();
     await pool.close();
     await new Promise((resolvePromise) => server.close(resolvePromise));
   }
