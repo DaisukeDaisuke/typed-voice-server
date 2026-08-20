@@ -52,7 +52,6 @@ test("startup URLs are grouped into one colorful ready tree and worker token rot
     "Remote URL",
     "Public WSS",
     "Admin URL",
-    "Worker Login",
     "worker session token file",
     "Remote Login Key",
   ]) {

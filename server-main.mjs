@@ -427,7 +427,6 @@ function printReadyTree() {
     [ANSI.green, "Remote URL", readyUrl("remote", remoteUrl)],
     [ANSI.green, "Public WSS", publicWss ? terminalHyperlink(publicWss, publicWss) : null],
     [ANSI.magenta, "Admin URL", readyUrl("admin", adminUrl)],
-    [ANSI.cyan, "Worker Login", readyUrl("worker", workerLogin)],
     [ANSI.yellow, "worker session token file", workerSessionTokenResolvedPath],
     [ANSI.yellow, "Remote Login Key", pairingFileResolvedPath],
     ...(process.stdin.isTTY ? [[ANSI.yellow, "Shutdown", "type anything + Enter (recommended), or Ctrl+C"]] : []),
