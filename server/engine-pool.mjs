@@ -19,6 +19,8 @@ const AUDIO_CHUNK_BYTES = 64 * 1024;
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 const PING_TIMEOUT_MS = 5_000;
 const HEARTBEAT_INTERVAL_MS = 15_000;
+const RECONNECT_TOKEN_REFRESH_MS = 60_000;
+const RECONNECT_TOKEN_TTL_MS = 5 * 60_000;
 
 export const EngineMessageType = Object.freeze({
   HELLO: 1,
@@ -33,6 +35,7 @@ export const EngineMessageType = Object.freeze({
   AUDIO_META: 16,
   AUDIO_CHUNK: 17,
   ERROR: 18,
+  RECONNECT_TOKEN: 19,
 });
 
 function encodeJson(type, value) {
@@ -169,7 +172,7 @@ export class BrowserWorkerPool {
     this.queue = [];
     this.dispatchPaused = false;
     this.idleWaiters = new Set();
-    this.sessionTokens = new Set();
+    this.sessionTokens = new Map();
     this.closed = false;
   }
 
@@ -263,7 +266,6 @@ export class BrowserWorkerPool {
         sends.push(this.#sendWithPing(worker, EngineMessageType.CONFIG, Buffer.from(JSON.stringify({
           profile: this.profile,
           reload: true,
-          sessionToken: worker.sessionToken,
         }), "utf8")));
       }
     }
@@ -317,7 +319,7 @@ export class BrowserWorkerPool {
       pendingPing: null,
       sendChain: Promise.resolve(),
       session: null,
-      sessionToken: null,
+      sessionTokenRefreshedAt: 0,
       transcript: null,
       accessTokenValidator,
     };
@@ -390,15 +392,13 @@ export class BrowserWorkerPool {
       const hello = decodeJson(payload, EngineMessageType.HELLO);
       if (hello.version !== 2) throw new Error("unsupported worker protocol version");
       const suppliedSessionToken = String(hello.sessionToken ?? "");
-      const sessionTokenAccepted = /^[0-9a-f]{64}$/.test(suppliedSessionToken)
-        && this.sessionTokens.has(suppliedSessionToken);
+      const sessionTokenAccepted = this.#sessionTokenAccepted(suppliedSessionToken);
       if (!sessionTokenAccepted && worker.accessTokenValidator) {
         if (!worker.accessTokenValidator(String(hello.accessToken ?? ""))) {
           throw new Error("worker access token is invalid or expired");
         }
       }
       worker.accessTokenValidator = null;
-      worker.sessionToken = sessionTokenAccepted ? suppliedSessionToken : randomBytes(32).toString("hex");
       const clientPublicKey = decodeBase64Url(hello.publicKey, 65, "worker public key");
       const clientNonce = decodeBase64Url(hello.nonce, 32, "worker nonce");
       const ecdh = createECDH("prime256v1");
@@ -422,14 +422,12 @@ export class BrowserWorkerPool {
       const expected = proof(worker.session, "client", worker.transcript);
       if (!timingSafeEqual(supplied, expected)) throw new Error("worker session proof mismatch");
       worker.authenticated = true;
-      this.sessionTokens.add(worker.sessionToken);
       worker.handshakeStage = "ready";
       clearTimeout(worker.handshakeTimer);
       worker.handshakeTimer = null;
       void this.#sendWithPing(worker, EngineMessageType.CONFIG, Buffer.from(JSON.stringify({
         profile: this.profile,
         reload: false,
-        sessionToken: worker.sessionToken,
       }), "utf8"))
         .catch(() => worker.ws.close(1001));
       this.#notify();
@@ -446,9 +444,38 @@ export class BrowserWorkerPool {
     worker.pendingPing = null;
     clearTimeout(pending.timer);
     worker.lastPongAt = Date.now();
+    this.#refreshSessionToken(worker, worker.lastPongAt);
     pending.resolve();
     this.#scheduleHeartbeat(worker);
     this.#notify();
+  }
+
+  #pruneSessionTokens(now = Date.now()) {
+    for (const [token, expiresAt] of this.sessionTokens) {
+      if (expiresAt <= now) this.sessionTokens.delete(token);
+    }
+  }
+
+  #sessionTokenAccepted(token, now = Date.now()) {
+    if (!/^[0-9a-f]{64}$/.test(token)) return false;
+    this.#pruneSessionTokens(now);
+    const expiresAt = this.sessionTokens.get(token);
+    return Number.isFinite(expiresAt) && expiresAt > now;
+  }
+
+  #refreshSessionToken(worker, now = Date.now()) {
+    if (!worker.authenticated || worker.ws.closed || !worker.session) return;
+    if (now - worker.sessionTokenRefreshedAt < RECONNECT_TOKEN_REFRESH_MS) return;
+    this.#pruneSessionTokens(now);
+    const nextToken = randomBytes(32).toString("hex");
+    try {
+      worker.ws.sendBinary(seal(worker.session, EngineMessageType.RECONNECT_TOKEN, Buffer.from(nextToken, "ascii")));
+    } catch {
+      worker.ws.close(1001);
+      return;
+    }
+    this.sessionTokens.set(nextToken, now + RECONNECT_TOKEN_TTL_MS);
+    worker.sessionTokenRefreshedAt = now;
   }
 
   #ping(worker) {

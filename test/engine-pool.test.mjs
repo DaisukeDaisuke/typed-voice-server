@@ -160,8 +160,7 @@ class VolunteerClient {
     assert.equal(config.type, EngineMessageType.CONFIG);
     const parsed = JSON.parse(config.payload.toString("utf8"));
     assert.equal(parsed.profile, "fp16");
-    assert.match(parsed.sessionToken, /^[0-9a-f]{64}$/);
-    this.sessionToken = parsed.sessionToken;
+    assert.match(this.sessionToken, /^[0-9a-f]{64}$/);
     this.#sendEncrypted(EngineMessageType.STATUS, Buffer.from(JSON.stringify({
       ready: true,
       profile: "fp16",
@@ -195,8 +194,17 @@ class VolunteerClient {
     while (true) {
       const message = open(this.session, await this.#next());
       this.serverMessages.push(message.type);
-      if (message.type !== EngineMessageType.PING) return message;
-      this.#sendEncrypted(EngineMessageType.PONG, message.payload);
+      if (message.type === EngineMessageType.PING) {
+        this.#sendEncrypted(EngineMessageType.PONG, message.payload);
+        continue;
+      }
+      if (message.type === EngineMessageType.RECONNECT_TOKEN) {
+        const token = message.payload.toString("ascii");
+        assert.match(token, /^[0-9a-f]{64}$/);
+        this.sessionToken = token;
+        continue;
+      }
+      return message;
     }
   }
 
@@ -278,6 +286,7 @@ test("Trusted Workerは暗号化後に受け取ったセッショントークン
   const port = server.address().port;
   const first = new VolunteerClient(`ws://127.0.0.1:${port}/worker/ws`, expectedToken);
   let reconnected = null;
+  let reconnectedAgain = null;
   try {
     await first.startReady();
     const sessionToken = first.sessionToken;
@@ -289,12 +298,22 @@ test("Trusted Workerは暗号化後に受け取ったセッショントークン
       sessionToken,
     );
     await reconnected.startReady();
-    assert.equal(reconnected.sessionToken, sessionToken);
+    assert.notEqual(reconnected.sessionToken, sessionToken);
     assert.equal(validationCount, 1);
     assert.equal(pool.status().engines.some((engine) => engine.authenticated), true);
+
+    reconnected.close();
+    reconnectedAgain = new VolunteerClient(
+      `ws://127.0.0.1:${port}/worker/ws`,
+      "expired-access-token",
+      sessionToken,
+    );
+    await reconnectedAgain.startReady();
+    assert.equal(validationCount, 1);
   } finally {
     first.close();
     reconnected?.close();
+    reconnectedAgain?.close();
     await pool.close();
     await new Promise((resolvePromise) => server.close(resolvePromise));
   }
@@ -313,8 +332,9 @@ test("Trusted Workerは各サーバーメッセージ前にPINGされ、脱落�
     const resultPromise = pool.synthesize("12345", "再割当テスト");
     const firstRequest = await first.nextSynthesis();
     assert.deepEqual(firstRequest, { id: "12345", text: "再割当テスト" });
-    assert.deepEqual(first.serverMessages.slice(0, 4), [
+    assert.deepEqual(first.serverMessages.slice(0, 5), [
       EngineMessageType.PING,
+      EngineMessageType.RECONNECT_TOKEN,
       EngineMessageType.CONFIG,
       EngineMessageType.PING,
       EngineMessageType.SYNTH,
