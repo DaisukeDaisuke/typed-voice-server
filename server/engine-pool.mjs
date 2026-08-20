@@ -15,11 +15,13 @@ const PROTOCOL_LABEL = Buffer.from("typed-voice-volunteer-worker/v2", "utf8");
 const MAX_WORKERS = 64;
 const MAX_WORKER_MESSAGE_BYTES = 1024 * 1024;
 const MAX_AUDIO_BYTES = 256 * 1024 * 1024;
+const MAX_SYNTHESIS_CACHE_ENTRIES = 64;
+const MAX_SYNTHESIS_CACHE_BYTES = 64 * 1024 * 1024;
 const AUDIO_CHUNK_BYTES = 64 * 1024;
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 const PING_TIMEOUT_MS = 5_000;
 const HEARTBEAT_INTERVAL_MS = 15_000;
-const RECONNECT_TOKEN_REFRESH_MS = 60_000;
+const RECONNECT_TOKEN_REFRESH_MS = 30_000;
 const RECONNECT_TOKEN_TTL_MS = 5 * 60_000;
 
 export const EngineMessageType = Object.freeze({
@@ -170,6 +172,10 @@ export class BrowserWorkerPool {
     this.nextWorkerIndex = 0;
     this.jobs = new Map();
     this.queue = [];
+    this.synthesisCache = new Map();
+    this.synthesisCacheBytes = 0;
+    this.synthesisConsumers = new Map();
+    this.reconfiguringProfile = null;
     this.dispatchPaused = false;
     this.idleWaiters = new Set();
     this.sessionTokens = new Map();
@@ -209,24 +215,85 @@ export class BrowserWorkerPool {
     const normalizedId = String(id ?? "");
     const normalizedText = String(text ?? "");
     if (!normalizedId || !normalizedText.trim()) throw new Error("id and text are required");
-    if (this.jobs.has(normalizedId) || this.queue.some((job) => job.id === normalizedId)) throw new Error("duplicate synthesis id");
-    return new Promise((resolvePromise, rejectPromise) => {
-      const job = {
-        id: normalizedId,
+    if (this.synthesisConsumers.has(normalizedId)) throw new Error("duplicate synthesis id");
+    const profile = this.reconfiguringProfile ?? this.profile;
+    const cacheKey = JSON.stringify([profile, normalizedText]);
+    const cached = this.synthesisCache.get(cacheKey);
+    if (cached?.state === "ready") {
+      return Promise.resolve(cached.result);
+    }
+    let entry = cached;
+    if (!entry) {
+      const jobId = `cache-${randomBytes(16).toString("hex")}`;
+      entry = {
+        state: "pending",
+        profile,
         text: normalizedText,
-        resolve: resolvePromise,
-        reject: rejectPromise,
-        timer: null,
+        cacheKey,
+        cacheable: true,
+        jobId,
+        consumers: new Map(),
+        result: null,
       };
-      job.timer = setTimeout(() => this.#expireJob(job), this.jobTimeoutMs);
-      this.queue.push(job);
-      this.#notify();
-      this.#dispatch();
+      this.synthesisCache.set(cacheKey, entry);
+      void this.#enqueueSynthesisJob(jobId, normalizedText).then((result) => {
+        if (entry.state !== "pending") return;
+        entry.state = "ready";
+        entry.result = result;
+        const mapped = this.synthesisCache.get(entry.cacheKey) === entry;
+        const cacheable = mapped && entry.cacheable && entry.profile === this.profile;
+        if (!cacheable && mapped) this.synthesisCache.delete(entry.cacheKey);
+        const consumers = [...entry.consumers.values()];
+        entry.consumers.clear();
+        for (const consumer of consumers) {
+          this.synthesisConsumers.delete(consumer.id);
+          consumer.resolve(result);
+        }
+        if (cacheable) {
+          this.synthesisCacheBytes += result.audio.length;
+          if (result.audio.length > MAX_SYNTHESIS_CACHE_BYTES) {
+            this.synthesisCache.delete(entry.cacheKey);
+            this.synthesisCacheBytes -= result.audio.length;
+          } else {
+            this.#pruneSynthesisCache();
+          }
+        }
+      }).catch((error) => {
+        if (this.synthesisCache.get(entry.cacheKey) === entry) this.synthesisCache.delete(entry.cacheKey);
+        entry.state = "failed";
+        const consumers = [...entry.consumers.values()];
+        entry.consumers.clear();
+        for (const consumer of consumers) {
+          this.synthesisConsumers.delete(consumer.id);
+          consumer.reject(error);
+        }
+      });
+    }
+    return new Promise((resolvePromise, rejectPromise) => {
+      const consumer = { id: normalizedId, resolve: resolvePromise, reject: rejectPromise };
+      entry.consumers.set(normalizedId, consumer);
+      this.synthesisConsumers.set(normalizedId, entry);
     });
   }
 
   async cancel(id) {
     const normalizedId = String(id ?? "");
+    const entry = this.synthesisConsumers.get(normalizedId);
+    if (entry) {
+      const consumer = entry.consumers.get(normalizedId);
+      entry.consumers.delete(normalizedId);
+      this.synthesisConsumers.delete(normalizedId);
+      consumer?.reject(abortError());
+      if (entry.state === "pending" && entry.consumers.size === 0) {
+        if (this.synthesisCache.get(entry.cacheKey) === entry) this.synthesisCache.delete(entry.cacheKey);
+        await this.#cancelQueuedOrRunningJob(entry.jobId);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  async #cancelQueuedOrRunningJob(normalizedId) {
     const queuedIndex = this.queue.findIndex((job) => job.id === normalizedId);
     if (queuedIndex >= 0) {
       const [job] = this.queue.splice(queuedIndex, 1);
@@ -253,10 +320,62 @@ export class BrowserWorkerPool {
     return true;
   }
 
+  #enqueueSynthesisJob(id, text) {
+    if (this.jobs.has(id) || this.queue.some((job) => job.id === id)) throw new Error("duplicate synthesis id");
+    return new Promise((resolvePromise, rejectPromise) => {
+      const job = {
+        id,
+        text,
+        resolve: resolvePromise,
+        reject: rejectPromise,
+        timer: null,
+      };
+      job.timer = setTimeout(() => this.#expireJob(job), this.jobTimeoutMs);
+      this.queue.push(job);
+      this.#notify();
+      this.#dispatch();
+    });
+  }
+
+  #pruneSynthesisCache() {
+    while (true) {
+      const readyEntries = [...this.synthesisCache.entries()].filter(([, entry]) => entry.state === "ready");
+      if (readyEntries.length <= MAX_SYNTHESIS_CACHE_ENTRIES && this.synthesisCacheBytes <= MAX_SYNTHESIS_CACHE_BYTES) return;
+      const oldest = readyEntries[0];
+      if (!oldest) return;
+      const [key, entry] = oldest;
+      this.synthesisCache.delete(key);
+      this.synthesisCacheBytes -= entry.result?.audio?.length ?? 0;
+    }
+  }
+
   async reconfigure(profile) {
     const nextProfile = validateProfile(profile);
     if (nextProfile === this.profile) return this.status();
     this.dispatchPaused = true;
+    this.reconfiguringProfile = nextProfile;
+    for (const [key, entry] of [...this.synthesisCache]) {
+      if (entry.state === "ready") {
+        this.synthesisCache.delete(key);
+        this.synthesisCacheBytes -= entry.result?.audio?.length ?? 0;
+        continue;
+      }
+      if (entry.state !== "pending") {
+        this.synthesisCache.delete(key);
+        continue;
+      }
+      if (this.jobs.has(entry.jobId)) {
+        entry.cacheable = false;
+        this.synthesisCache.delete(key);
+        continue;
+      }
+      const nextKey = JSON.stringify([nextProfile, entry.text]);
+      this.synthesisCache.delete(key);
+      entry.profile = nextProfile;
+      entry.cacheKey = nextKey;
+      entry.cacheable = true;
+      this.synthesisCache.set(nextKey, entry);
+    }
     await this.#waitForRunningJobs();
     this.profile = nextProfile;
     const sends = [];
@@ -270,6 +389,7 @@ export class BrowserWorkerPool {
       }
     }
     await Promise.allSettled(sends);
+    this.reconfiguringProfile = null;
     this.dispatchPaused = false;
     this.#notify();
     this.#dispatch();
@@ -289,6 +409,14 @@ export class BrowserWorkerPool {
     }
     this.workers.clear();
     this.sessionTokens.clear();
+    for (const [id, entry] of [...this.synthesisConsumers]) {
+      const consumer = entry.consumers.get(id);
+      entry.consumers.delete(id);
+      consumer?.reject(new Error("worker pool closed"));
+    }
+    this.synthesisConsumers.clear();
+    this.synthesisCache.clear();
+    this.synthesisCacheBytes = 0;
     this.#notify();
   }
 

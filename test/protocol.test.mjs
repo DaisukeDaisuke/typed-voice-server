@@ -86,3 +86,39 @@ test("匿名端末ハッシュをサーバーsaltとAUTH証明へ結び付ける
   tampered[tampered.length - 1] ^= 1;
   assert.equal(readClientAuth(tampered, accepted.session).valid, false);
 });
+
+test("再接続用client instance IDは匿名端末ハッシュと一緒にAUTH証明へ結び付ける", () => {
+  const authKey = randomBytes(32);
+  const encryptionKey = randomBytes(32);
+  const clientNonce = randomBytes(32);
+  const clientBanSalt = randomBytes(32);
+  const clientHash = randomBytes(32);
+  const clientInstanceId = randomBytes(16);
+  const hello = Buffer.concat([
+    Buffer.from([Opcode.HELLO_CLIENT, VERSION, AudioFormat.FLOAT32LE, 0]),
+    clientNonce,
+  ]);
+  const accepted = acceptClientHello(hello, authKey, encryptionKey, { clientBanSalt });
+  const serverNonce = accepted.hello.subarray(4, 36);
+  const clientProof = createHmac("sha256", authKey)
+    .update(Buffer.concat([
+      proofInput("client", AudioFormat.FLOAT32LE, clientNonce, serverNonce),
+      clientHash,
+      clientInstanceId,
+    ]))
+    .digest();
+  const auth = Buffer.concat([
+    Buffer.from([Opcode.AUTH, VERSION, AudioFormat.FLOAT32LE, 0]),
+    clientProof,
+    clientHash,
+    clientInstanceId,
+  ]);
+  const parsed = readClientAuth(auth, accepted.session);
+  assert.equal(parsed.valid, true);
+  assert.equal(parsed.clientHash, clientHash.toString("hex"));
+  assert.equal(parsed.clientInstanceId, clientInstanceId.toString("hex"));
+
+  const tampered = Buffer.from(auth);
+  tampered[tampered.length - 1] ^= 1;
+  assert.equal(readClientAuth(tampered, accepted.session).valid, false);
+});

@@ -21,6 +21,7 @@ export const Opcode = Object.freeze({
   WORKER_STATUS: 0x05,
   TEXT: 0x10,
   CANCEL: 0x11,
+  TEXT_SYNC: 0x12,
   AUDIO: 0x20,
   ERROR: 0x7f,
   HELLO_CLIENT: 0xf0,
@@ -98,17 +99,19 @@ export function acceptClientHello(frame, authKey, encryptionKey, { clientBanSalt
 
 export function readClientAuth(frame, session) {
   const bytes = Buffer.from(frame);
-  if (![36, 68].includes(bytes.length) || bytes[0] !== Opcode.AUTH || bytes[1] !== VERSION || bytes[2] !== session.audioFormat || bytes[3] !== 0) {
-    return { valid: false, clientHash: null };
+  if (![36, 68, 84].includes(bytes.length) || bytes[0] !== Opcode.AUTH || bytes[1] !== VERSION || bytes[2] !== session.audioFormat || bytes[3] !== 0) {
+    return { valid: false, clientHash: null, clientInstanceId: null };
   }
-  const clientHashBytes = bytes.length === 68 ? bytes.subarray(36, 68) : null;
+  const clientHashBytes = bytes.length >= 68 ? bytes.subarray(36, 68) : null;
+  const clientInstanceIdBytes = bytes.length === 84 ? bytes.subarray(68, 84) : null;
   const expectedProof = clientHashBytes
-    ? hmac(session.authKey, concat(session.clientProofInput, clientHashBytes))
+    ? hmac(session.authKey, concat(session.clientProofInput, clientHashBytes, clientInstanceIdBytes ?? Buffer.alloc(0)))
     : session.expectedClientProof;
   const valid = timingSafeEqual(bytes.subarray(4, 36), expectedProof);
   return {
     valid,
     clientHash: valid && clientHashBytes ? clientHashBytes.toString("hex") : null,
+    clientInstanceId: valid && clientInstanceIdBytes ? clientInstanceIdBytes.toString("hex") : null,
   };
 }
 

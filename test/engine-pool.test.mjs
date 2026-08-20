@@ -186,6 +186,10 @@ class VolunteerClient {
     this.#sendEncrypted(EngineMessageType.AUDIO_CHUNK, encodeAudioChunk(id, audio));
   }
 
+  sendError(id, error = "worker synthesis failed") {
+    this.#sendEncrypted(EngineMessageType.ERROR, Buffer.from(JSON.stringify({ id, error }), "utf8"));
+  }
+
   close() {
     this.socket?.close();
   }
@@ -331,7 +335,8 @@ test("Trusted Workerは各サーバーメッセージ前にPINGされ、脱落�
 
     const resultPromise = pool.synthesize("12345", "再割当テスト");
     const firstRequest = await first.nextSynthesis();
-    assert.deepEqual(firstRequest, { id: "12345", text: "再割当テスト" });
+    assert.equal(firstRequest.text, "再割当テスト");
+    assert.match(firstRequest.id, /^cache-[0-9a-f]{32}$/);
     assert.deepEqual(first.serverMessages.slice(0, 5), [
       EngineMessageType.PING,
       EngineMessageType.RECONNECT_TOKEN,
@@ -342,9 +347,9 @@ test("Trusted Workerは各サーバーメッセージ前にPINGされ、脱落�
 
     first.close();
     const secondRequest = await second.nextSynthesis();
-    assert.deepEqual(secondRequest, { id: "12345", text: "再割当テスト" });
+    assert.deepEqual(secondRequest, firstRequest);
     const samples = new Float32Array([0, 0.25, -0.25, 0.5]);
-    second.sendAudio("12345", samples);
+    second.sendAudio(secondRequest.id, samples);
 
     const result = await resultPromise;
     assert.equal(result.sampleRate, 24000);
@@ -354,6 +359,65 @@ test("Trusted Workerは各サーバーメッセージ前にPINGされ、脱落�
   } finally {
     first.close();
     second.close();
+    await pool.close();
+    await new Promise((resolvePromise) => server.close(resolvePromise));
+  }
+});
+
+test("完全一致queryは生成中も完成後も1回のWorker合成へ束ねる", async () => {
+  const pool = new BrowserWorkerPool({ profile: "fp16", jobTimeoutMs: 5000 });
+  const server = await startPoolServer(pool);
+  const port = server.address().port;
+  const worker = new VolunteerClient(`ws://127.0.0.1:${port}/worker/ws`);
+  try {
+    await worker.startReady();
+
+    const firstResult = pool.synthesize("request-a", "同じ文章");
+    const secondResult = pool.synthesize("request-b", "同じ文章");
+    const request = await worker.nextSynthesis();
+    assert.equal(request.text, "同じ文章");
+    assert.equal(pool.status().running, 1);
+    assert.equal(pool.status().queued, 0);
+
+    const samples = new Float32Array([0.1, -0.1, 0.2]);
+    worker.sendAudio(request.id, samples);
+    const [first, second] = await Promise.all([firstResult, secondResult]);
+    assert.deepEqual(first, second);
+
+    const cached = await pool.synthesize("request-c", "同じ文章");
+    assert.deepEqual(cached, first);
+    assert.equal(pool.status().running, 0);
+    assert.equal(pool.status().queued, 0);
+  } finally {
+    worker.close();
+    await pool.close();
+    await new Promise((resolvePromise) => server.close(resolvePromise));
+  }
+});
+
+test("共有queryのWorker失敗は全consumerへ伝播し、失敗cacheは次回再生成する", async () => {
+  const pool = new BrowserWorkerPool({ profile: "fp16", jobTimeoutMs: 5000 });
+  const server = await startPoolServer(pool);
+  const port = server.address().port;
+  const worker = new VolunteerClient(`ws://127.0.0.1:${port}/worker/ws`);
+  try {
+    await worker.startReady();
+    const firstResult = pool.synthesize("failure-a", "失敗する文章");
+    const secondResult = pool.synthesize("failure-b", "失敗する文章");
+    const firstRequest = await worker.nextSynthesis();
+    worker.sendError(firstRequest.id, "test failure");
+    await assert.rejects(firstResult, /test failure/);
+    await assert.rejects(secondResult, /test failure/);
+
+    const retryResult = pool.synthesize("failure-c", "失敗する文章");
+    const retryRequest = await worker.nextSynthesis();
+    assert.notEqual(retryRequest.id, firstRequest.id);
+    const samples = new Float32Array([0.3]);
+    worker.sendAudio(retryRequest.id, samples);
+    const retry = await retryResult;
+    assert.equal(retry.sampleCount, 1);
+  } finally {
+    worker.close();
     await pool.close();
     await new Promise((resolvePromise) => server.close(resolvePromise));
   }

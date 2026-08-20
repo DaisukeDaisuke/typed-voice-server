@@ -15,10 +15,18 @@ import {
 import { acceptWebSocketUpgrade } from "../worker/websocket.mjs";
 
 const MAX_TEXT_BYTES = 16 * 1024;
+const MAX_SYNC_TEXT_BYTES = MAX_TEXT_BYTES * 2 + 1024;
+const MAX_AUTHENTICATED_CLIENTS = 64;
+const MAX_UNAUTHENTICATED_CLIENTS = 32;
+const MAX_PENDING_PER_CLIENT = 3;
+const MAX_TOTAL_PENDING = MAX_AUTHENTICATED_CLIENTS * MAX_PENDING_PER_CLIENT;
+const REQUEST_BURST_WINDOW_MS = 10_000;
+const MAX_REQUESTS_PER_BURST_WINDOW = 64;
 const AUDIO_CHUNK_BYTES = 64 * 1024;
 const WORKER_STATUS_INTERVAL_MS = 5_000;
 const TRUSTED_WORKER_HELLO = 1;
 const MODEL_PROFILES = new Set(["fp32", "fp16", "mobile-int8", "mobile-int4"]);
+const CLIENT_TOKEN_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:[1-9][0-9]{0,9}$/i;
 
 function errorPayload(code, message) {
   const text = Buffer.from(String(message ?? ""), "utf8");
@@ -74,6 +82,8 @@ export class RemoteClientHub {
     this.onWorkerConnection = typeof onWorkerConnection === "function" ? onWorkerConnection : null;
     this.clients = new Set();
     this.pending = new Map();
+    this.pendingByClientToken = new Map();
+    this.pendingByDeliveryId = new Map();
     this.workerStatusTimer = null;
     this.closed = false;
   }
@@ -165,14 +175,18 @@ export class RemoteClientHub {
     for (const client of [...this.clients]) client.ws.close(1001);
     this.clients.clear();
     for (const [id, entry] of [...this.pending]) {
-      this.pending.delete(id);
-      await this.pool.cancel(id).catch(() => {});
+      this.#detachPending(entry, { cancelSynthesis: true });
       this.#recordResult(entry, { ok: false, cancelled: true, error: "SERVER_SHUTDOWN" });
     }
     this.#emitStatus();
   }
 
   #attachClient(ws, firstPayload = null) {
+    const unauthenticatedCount = [...this.clients].filter((client) => !client.authenticated).length;
+    if (unauthenticatedCount >= MAX_UNAUTHENTICATED_CLIENTS) {
+      ws.close(1013);
+      return;
+    }
     const client = {
       ws,
       connectionId: randomId().toString(16).padStart(16, "0"),
@@ -184,10 +198,14 @@ export class RemoteClientHub {
       session: null,
       authenticated: false,
       clientHash: null,
+      clientInstanceId: null,
       authTimer: null,
       heartbeatTimer: null,
       pongTimer: null,
       pendingPing: null,
+      replacedBy: null,
+      requestWindowStartedAt: Date.now(),
+      requestWindowCount: 0,
     };
     this.clients.add(client);
     this.#emitStatus();
@@ -214,15 +232,17 @@ export class RemoteClientHub {
     clearTimeout(client.authTimer);
     clearTimeout(client.heartbeatTimer);
     clearTimeout(client.pongTimer);
-    const owned = [...this.pending].filter(([, entry]) => entry.client === client);
-    for (const [id] of owned) this.pending.delete(id);
-    for (const [id, entry] of owned) {
-      await this.pool.cancel(id).catch(() => {});
-      this.#recordResult(entry, {
-        ok: false,
-        cancelled: true,
-        error: this.closed ? "SERVER_SHUTDOWN" : "CLIENT_DISCONNECTED",
-      });
+    client.authenticated = false;
+    if (client.replacedBy) {
+      this.#emitStatus();
+      return;
+    }
+    if (this.closed) {
+      const owned = [...this.pending].filter(([, entry]) => entry.client === client);
+      for (const [, entry] of owned) {
+        this.#detachPending(entry, { cancelSynthesis: true });
+        this.#recordResult(entry, { ok: false, cancelled: true, error: "SERVER_SHUTDOWN" });
+      }
     }
     this.#emitStatus();
   }
@@ -239,14 +259,27 @@ export class RemoteClientHub {
       const auth = readClientAuth(payload, client.session);
       if (!auth.valid || !auth.clientHash) throw new Error("authentication failed");
       client.clientHash = auth.clientHash;
+      client.clientInstanceId = auth.clientInstanceId ?? null;
       if (this.isClientBanned(client.clientHash)) {
         client.ws.close(1008);
+        return;
+      }
+      const sameAuthenticatedClient = [...this.clients].some((candidate) => (
+        candidate !== client
+        && candidate.authenticated
+        && client.clientInstanceId
+        && candidate.clientInstanceId === client.clientInstanceId
+      ));
+      const authenticatedCount = [...this.clients].filter((candidate) => candidate.authenticated).length;
+      if (!sameAuthenticatedClient && authenticatedCount >= MAX_AUTHENTICATED_CLIENTS) {
+        client.ws.close(1013);
         return;
       }
       clearTimeout(client.authTimer);
       client.authTimer = null;
       client.authenticated = true;
       client.stage = "ready";
+      this.#takeOverAuthenticatedClient(client);
       this.#emitStatus();
       this.#sendServerConfig(client);
       const workerStatus = this.#workerStatus();
@@ -275,7 +308,11 @@ export class RemoteClientHub {
       return;
     }
     if (frame.op === Opcode.TEXT) {
-      this.#acceptText(client, frame);
+      this.#acceptText(client, frame, null);
+      return;
+    }
+    if (frame.op === Opcode.TEXT_SYNC) {
+      this.#acceptSyncText(client, frame);
       return;
     }
     if (frame.op === Opcode.CANCEL) {
@@ -285,22 +322,63 @@ export class RemoteClientHub {
     throw new Error("unsupported client opcode");
   }
 
-  #acceptText(client, frame) {
-    if (frame.payload.length < 1 || frame.payload.length > MAX_TEXT_BYTES) throw new Error("invalid text length");
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(frame.payload);
+  #acceptSyncText(client, frame) {
+    if (frame.payload.length < 1 || frame.payload.length > MAX_SYNC_TEXT_BYTES) throw new Error("invalid sync text length");
+    if (!this.#consumeRequestBudget(client)) return;
+    const request = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(frame.payload));
+    const clientToken = String(request?.clientToken ?? "");
+    if (!CLIENT_TOKEN_PATTERN.test(clientToken)) throw new Error("invalid client token");
+    const text = String(request?.text ?? "");
+    if (Buffer.byteLength(text, "utf8") < 1 || Buffer.byteLength(text, "utf8") > MAX_TEXT_BYTES) throw new Error("invalid text length");
+    const resumeKey = `${client.clientInstanceId}:${clientToken}`;
+    const existing = this.pendingByClientToken.get(resumeKey);
+    if (existing) {
+      if (existing.text !== text
+        || existing.conversationId !== client.conversationId
+        || existing.modelProfile !== this.modelProfile) {
+        throw new Error("resume query mismatch");
+      }
+      this.pendingByDeliveryId.delete(existing.deliveryId.toString());
+      existing.client = client;
+      existing.deliveryId = frame.id;
+      this.pendingByDeliveryId.set(existing.deliveryId.toString(), existing);
+      return;
+    }
+    this.#acceptText(client, frame, { text, clientToken, resumeKey, budgetConsumed: true });
+  }
+
+  #acceptText(client, frame, sync = null) {
+    if (!sync?.budgetConsumed && !this.#consumeRequestBudget(client)) return;
+    if (!sync && (frame.payload.length < 1 || frame.payload.length > MAX_TEXT_BYTES)) throw new Error("invalid text length");
+    const text = sync?.text ?? new TextDecoder("utf-8", { fatal: true }).decode(frame.payload);
     if (!text.trim()) throw new Error("empty text");
+    const ownedPending = [...this.pending.values()].filter((entry) => entry.client === client).length;
+    if (ownedPending >= MAX_PENDING_PER_CLIENT) {
+      client.ws.close(1008);
+      return;
+    }
     const id = frame.id.toString();
     if (this.pending.has(id)) throw new Error("duplicate request id");
+    client.requests += 1;
+    if (this.pending.size >= MAX_TOTAL_PENDING) {
+      client.ws.close(1008);
+      return;
+    }
     const entry = {
       id,
       rawId: frame.id,
+      deliveryId: frame.id,
       text,
       client,
       conversationId: client.conversationId,
+      modelProfile: this.modelProfile,
+      clientToken: sync?.clientToken ?? null,
+      resumeKey: sync?.resumeKey ?? null,
       startedAt: Date.now(),
     };
-    client.requests += 1;
     this.pending.set(id, entry);
+    if (entry.resumeKey) this.pendingByClientToken.set(entry.resumeKey, entry);
+    this.pendingByDeliveryId.set(entry.deliveryId.toString(), entry);
     this.onHistory({
       phase: "request",
       conversationId: entry.conversationId,
@@ -309,19 +387,21 @@ export class RemoteClientHub {
       at: entry.startedAt,
     });
     this.#emitStatus();
-    void Promise.resolve().then(() => this.pool.synthesize(id, text)).then((audio) => {
+    void this.pool.synthesize(id, text).then((audio) => {
       if (this.pending.get(id) !== entry) return;
       try {
-        if (client.authenticated && !client.ws.closed) this.#sendAudio(client, frame.id, audio.sampleRate, audio.sampleCount, audio.audio);
-        this.pending.delete(id);
+        const owner = entry.client;
+        if (owner.authenticated && !owner.ws.closed) this.#sendAudio(owner, entry.deliveryId, audio.sampleRate, audio.sampleCount, audio.audio);
+        this.#detachPending(entry, { cancelSynthesis: false });
         this.#recordResult(entry, { ok: true });
         this.#emitStatus();
       } catch (error) {
-        this.pending.delete(id);
-        if (client.authenticated && !client.ws.closed) {
-          this.#sendEncrypted(client, {
+        this.#detachPending(entry, { cancelSynthesis: false });
+        const owner = entry.client;
+        if (owner.authenticated && !owner.ws.closed) {
+          this.#sendEncrypted(owner, {
             op: Opcode.ERROR,
-            id: frame.id,
+            id: entry.deliveryId,
             payload: errorPayload(5, error instanceof Error ? error.message : String(error)),
           });
         }
@@ -333,12 +413,13 @@ export class RemoteClientHub {
       }
     }).catch((error) => {
       if (this.pending.get(id) !== entry) return;
-      this.pending.delete(id);
+      this.#detachPending(entry, { cancelSynthesis: false });
       const cancelled = error?.name === "AbortError";
-      if (client.authenticated && !client.ws.closed) {
-        this.#sendEncrypted(client, {
+      const owner = entry.client;
+      if (owner.authenticated && !owner.ws.closed) {
+        this.#sendEncrypted(owner, {
           op: Opcode.ERROR,
-          id: frame.id,
+          id: entry.deliveryId,
           payload: errorPayload(cancelled ? 6 : 5, error instanceof Error ? error.message : String(error)),
         });
       }
@@ -352,14 +433,53 @@ export class RemoteClientHub {
   }
 
   #acceptCancel(client, rawId) {
-    const id = rawId.toString();
-    const entry = this.pending.get(id);
+    const deliveryId = rawId.toString();
+    const entry = this.pendingByDeliveryId.get(deliveryId);
     if (!entry || entry.client !== client) return;
-    this.pending.delete(id);
-    void this.pool.cancel(id).catch(() => {});
+    this.#detachPending(entry, { cancelSynthesis: true });
     this.#sendEncrypted(client, { op: Opcode.ERROR, id: rawId, payload: errorPayload(6, "CANCELLED") });
     this.#recordResult(entry, { ok: false, cancelled: true, error: "CANCELLED" });
     this.#emitStatus();
+  }
+
+  #takeOverAuthenticatedClient(client) {
+    if (!client.clientInstanceId) return;
+    const previousClients = [...this.clients].filter((candidate) => (
+      candidate !== client
+      && candidate.authenticated
+      && candidate.clientInstanceId === client.clientInstanceId
+    ));
+    if (!previousClients.length) return;
+    previousClients.sort((left, right) => right.lastSeenAt - left.lastSeenAt);
+    if (!client.conversationId) client.conversationId = previousClients[0].conversationId;
+    for (const previous of previousClients) {
+      previous.replacedBy = client;
+      previous.authenticated = false;
+      previous.stage = "replaced";
+      previous.ws.close(1000);
+    }
+  }
+
+  #consumeRequestBudget(client, now = Date.now()) {
+    if (now - client.requestWindowStartedAt >= REQUEST_BURST_WINDOW_MS) {
+      client.requestWindowStartedAt = now;
+      client.requestWindowCount = 0;
+    }
+    client.requestWindowCount += 1;
+    if (client.requestWindowCount <= MAX_REQUESTS_PER_BURST_WINDOW) return true;
+    client.ws.close(1008);
+    return false;
+  }
+
+  #detachPending(entry, { cancelSynthesis }) {
+    if (this.pending.get(entry.id) === entry) this.pending.delete(entry.id);
+    if (entry.resumeKey && this.pendingByClientToken.get(entry.resumeKey) === entry) {
+      this.pendingByClientToken.delete(entry.resumeKey);
+    }
+    if (this.pendingByDeliveryId.get(entry.deliveryId.toString()) === entry) {
+      this.pendingByDeliveryId.delete(entry.deliveryId.toString());
+    }
+    if (cancelSynthesis) void this.pool.cancel(entry.id).catch(() => {});
   }
 
   #recordResult(entry, { ok, cancelled = false, error = null }) {
