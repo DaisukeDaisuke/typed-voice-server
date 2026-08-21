@@ -229,7 +229,7 @@ let shutdownInputBuffer = "";
 
 const authKey = randomBytes(32);
 const encryptionKey = randomBytes(32);
-const adminSessionToken = randomBytes(32).toString("hex");
+const adminSessionToken = randomBytes(64).toString("hex");
 const workerResetToken = randomBytes(64).toString("hex");
 let workerAccessSecret = randomBytes(64);
 let clientBanSalt = null;

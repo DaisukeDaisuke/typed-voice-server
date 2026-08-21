@@ -1,7 +1,7 @@
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { acceptWebSocketUpgrade } from "../worker/websocket.mjs";
 
 const ADMIN_COOKIE = "typed_voice_admin_session";
@@ -13,7 +13,7 @@ const ADMIN_LOGIN_HTML = Buffer.from(`<!doctype html>
 const status = document.getElementById("status");
 const token = location.hash.slice(1);
 history.replaceState(null, "", location.pathname);
-if (!/^[0-9a-f]{64}$/.test(token)) {
+if (!/^[0-9a-f]{128}$/.test(token)) {
   status.textContent = "管理セッショントークンがありません。";
 } else {
   fetch("./session", { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "text/plain;charset=UTF-8" }, body: token })
@@ -59,6 +59,12 @@ function safeEqual(leftValue, rightValue) {
   const left = Buffer.from(String(leftValue ?? ""), "utf8");
   const right = Buffer.from(String(rightValue ?? ""), "utf8");
   return left.length === right.length && right.length > 0 && timingSafeEqual(left, right);
+}
+
+function adminTokenEqual(leftValue, rightValue) {
+  const left = createHash("sha512").update(String(leftValue ?? ""), "utf8").digest();
+  const right = createHash("sha512").update(String(rightValue ?? ""), "utf8").digest();
+  return timingSafeEqual(left, right);
 }
 
 function cookieValue(request, name) {
@@ -180,7 +186,7 @@ export class OrchestratorHttpServer {
     for (const role of this.roles) {
       if (!new Set(["admin", "worker", "remote"]).has(role)) throw new Error(`unsupported HTTP role: ${role}`);
     }
-    if (this.roles.has("admin") && !/^[0-9a-f]{64}$/.test(String(sessionToken ?? ""))) throw new Error("admin session token must be 64 lowercase hex characters");
+    if (this.roles.has("admin") && !/^[0-9a-f]{128}$/.test(String(sessionToken ?? ""))) throw new Error("admin session token must be 128 lowercase hex characters");
     if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new Error("port must be 0..65535");
     this.host = normalizedHost;
     this.port = port;
@@ -328,7 +334,7 @@ export class OrchestratorHttpServer {
         return;
       }
       const supplied = await readBoundedTextBody(request, 128).catch(() => "");
-      if (!safeEqual(supplied, this.sessionToken)) {
+      if (!adminTokenEqual(supplied, this.sessionToken)) {
         noAccess(response);
         return;
       }
@@ -432,7 +438,7 @@ export class OrchestratorHttpServer {
   }
 
   #adminAuthorized(request) {
-    return safeEqual(cookieValue(request, ADMIN_COOKIE), this.sessionToken);
+    return adminTokenEqual(cookieValue(request, ADMIN_COOKIE), this.sessionToken);
   }
 
   #workerAuthorized(request) {

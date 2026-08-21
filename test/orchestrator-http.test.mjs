@@ -8,7 +8,7 @@ import test from "node:test";
 import { OrchestratorHttpServer } from "../server/orchestrator-http.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const sessionToken = "a".repeat(64);
+const sessionToken = "a".repeat(128);
 const workerToken = "c".repeat(128);
 const workerResetToken = "e".repeat(128);
 const workerPageUrl = "https://daisukedaisuke.github.io/typed-voice/worker.html";
@@ -182,7 +182,7 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
       method: "POST",
       path: "/admin/session",
       origin: `http://127.0.0.1:${port}`,
-      body: "b".repeat(64),
+      body: "b".repeat(128),
     });
     assert.equal(wrong.statusCode, 404);
 

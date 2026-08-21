@@ -174,7 +174,7 @@ async function handleRequest(method, params) {
   }
   if (method === "write-admin-token") {
     const token = String(params?.token ?? "");
-    if (!/^[0-9a-f]{64}$/u.test(token)) throw new Error("admin token must be 64 lowercase hex characters");
+    if (!/^[0-9a-f]{128}$/u.test(token)) throw new Error("admin token must be 128 lowercase hex characters");
     return writePrivate(adminSessionTokenPath, `${token}\n`);
   }
   if (method === "write-worker-token") {
