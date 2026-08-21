@@ -86,7 +86,7 @@ codex sandbox setup --elevated --current-user
 必要なものがすべて揃っていれば、そのまま`typed-voice-server`が起動します。
 
 # 管理リンクの発行
-起動後は、ターミナルで紫色の「Admin URL」の右のリンクをctrlキーを押しながらクリックし、管理ページにログインしてください。そうすると、接続用QRコードが表示されます。
+起動後は、ターミナルで紫色の「Admin URL」の右のリンクをctrlキーを押しながらクリックし、管理ページにログインしてください。<br>そうすると、接続用QRコードが表示されます。
 
 <img width="720" height="312" alt="terminal" src="https://github.com/user-attachments/assets/47f779b2-5557-41ba-bf9b-b0e616a3aa55" />
 
