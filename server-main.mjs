@@ -424,7 +424,6 @@ function printReadyTree() {
   const publicWss = pairingPayload?.u ? String(pairingPayload.u) : null;
   const rows = [
     [ANSI.cyan, "Worker URL", readyUrl("worker", workerUrl)],
-    [ANSI.green, "Remote URL", readyUrl("remote", remoteUrl)],
     [ANSI.green, "Public WSS", publicWss ? terminalHyperlink(publicWss, publicWss) : null],
     [ANSI.magenta, "Admin URL", readyUrl("admin", adminUrl)],
     [ANSI.yellow, "worker session token file", workerSessionTokenResolvedPath],

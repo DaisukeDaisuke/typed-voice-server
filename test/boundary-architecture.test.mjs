@@ -49,7 +49,6 @@ test("startup URLs are grouped into one colorful ready tree and worker token rot
   for (const label of [
     "server is ready!",
     "Worker URL",
-    "Remote URL",
     "Public WSS",
     "Admin URL",
     "worker session token file",
