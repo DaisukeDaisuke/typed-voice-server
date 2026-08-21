@@ -86,9 +86,16 @@ codex sandbox setup --elevated --current-user
 必要なものがすべて揃っていれば、そのまま`typed-voice-server`が起動します。
 
 # 管理リンクの発行
+> [!IMPORTANT]
+> 起動時点で、接続されているワーカーの数は0個のため、この時点でQRコードでクライアントモードを起動しても読み上げることはできません。<br>
+> `Worker URL`の隣にあるurlをブラウザで開き参加するか、コマンドプロンプト上で`Start.cmd --open-worker=true`を実行、ワーカーURLを公開したうえでつよ～いゲーミングパソコンを持っている方をボランティアとして誘い、音声合成ボランティアとして参加してもらいましょう<br>
+> Worker URLは、おおよそ10分ごとに再生成されます。
+> `typed-voice-server`は、本体に音声合成エンジンを含みません。クライアントモードとワーカー間ののマッチングのみを行います。<br>
+
 起動後は、ターミナルで紫色の「Admin URL」の右のリンクをctrlキーを押しながらクリックし、管理ページにログインしてください。<br>そうすると、接続用QRコードが表示されます。
 
 <img width="720" height="312" alt="terminal" src="https://github.com/user-attachments/assets/47f779b2-5557-41ba-bf9b-b0e616a3aa55" />
+
 
 また、開発者であれば、Start.cmdの引数に`--open-admin=true --open-worker=true`のようなオプションを付与することで、管理ページを外出先で開くこともできます。
 ```
@@ -96,8 +103,8 @@ Start.cmd  --open-admin=true
 ```
 
 > [!TIP]
-> QRコードは株式会社デンソーウェーブの登録商標です
-> QR Code is a registered trademark of DENSO WAVE INCORPORATED in Japan and in other countries.
+> QRコードは株式会社デンソーウェーブの登録商標です<br>
+> QR Code is a registered trademark of DENSO WAVE INCORPORATED in Japan and in other countries.<br>
 
 ## インストール完了
 ここまで完了したら、以後は展開したフォルダーの`Server.cmd`をダブルクリックするだけで起動できます。
