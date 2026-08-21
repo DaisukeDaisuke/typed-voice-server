@@ -84,5 +84,20 @@ codex sandbox setup --elevated --current-user
 > エラーが表示された場合は、画面に表示された不足項目を確認してください。エラー時は画面がすぐ閉じないよう、キー入力を待ってから終了します。
 
 必要なものがすべて揃っていれば、そのまま`typed-voice-server`が起動します。
+
+# 管理リンクの発行
+起動後は、ターミナルで紫色の「Admin URL」の右のリンクをクリックし、管理ページにログインしてください。そうすると、ログインQRコードが表示されます。
+
+<img width="720" height="312" alt="terminal" src="https://github.com/user-attachments/assets/47f779b2-5557-41ba-bf9b-b0e616a3aa55" />
+
+また、開発者であれば、Start.cmdの引数に`--open-admin=true --open-worker=true`のようなオプションを付与することで、管理ページを外出先で開くこともできます。
+```
+Start.cmd  --open-admin=true 
+```
+
+> [!TIP]
+> QRコードは株式会社デンソーウェーブの登録商標です
+> QR Code is a registered trademark of DENSO WAVE INCORPORATED in Japan and in other countries.
+
 ## インストール完了
 ここまで完了したら、以後は展開したフォルダーの`Server.cmd`をダブルクリックするだけで起動できます。
