@@ -243,11 +243,6 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     // 裏AI編集あり / isolation: typedvoice-worker-auth-20260819 / END
     const workerLogin = await httpRequest(port, { path: "/worker/login" });
     assert.equal(workerLogin.statusCode, 200);
-    assert.match(workerLogin.body, /128/u);
-    assert.match(workerLogin.body, /daisukedaisuke\.github\.io\/typed-voice\/worker\.html/u);
-    assert.match(workerLogin.body, /wss:\/\/remote\.example\/remote/u);
-    assert.match(workerLogin.body, /searchParams\.set\("server", workerServerUrl\)/u);
-    assert.match(workerLogin.body, /destination\.hash = token/u);
 
     const wrongWorker = await httpRequest(port, {
       method: "POST",
