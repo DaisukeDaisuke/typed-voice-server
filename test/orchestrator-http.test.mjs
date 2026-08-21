@@ -11,7 +11,7 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sessionToken = "a".repeat(128);
 const workerToken = "c".repeat(128);
 const workerResetToken = "e".repeat(128);
-const workerPageUrl = "https://daisukedaisuke.github.io/typed-voice/worker.html";
+const workerPageUrl = "https://rabbitdaisuke.github.io/typed-voice/worker.html";
 const workerServerUrl = "wss://remote.example/remote";
 
 function httpRequest(port, { method = "GET", path, cookie = null, origin = null, forwardedHost = null, forwardedProto = null, hostHeader = null, body = null }) {
@@ -316,7 +316,7 @@ test("管理画面と管理WebSocketはセッショントークン由来Cookie�
     assert.equal(workerUpgradeCalls, 3);
     await websocketUpgrade(port, workerCookie, `http://localhost:${port}`, "/worker/ws", "attacker.invalid", "https");
     assert.equal(workerUpgradeCalls, 3);
-    await websocketUpgrade(port, null, "https://daisukedaisuke.github.io", "/worker/ws");
+    await websocketUpgrade(port, null, "https://rabbitdaisuke.github.io", "/worker/ws");
     assert.equal(workerUpgradeCalls, 4);
     assert.equal(typeof workerUpgradeAccessTokenValidator, "function");
     assert.equal(workerUpgradeAccessTokenValidator(workerToken), true);

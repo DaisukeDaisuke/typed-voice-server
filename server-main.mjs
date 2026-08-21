@@ -29,7 +29,7 @@ const workerDirectory = join(projectRoot, "worker");
 const adminDirectory = join(projectRoot, "admin");
 const webDirectory = join(projectRoot, "web");
 const dataDirectory = join(projectRoot, "data");
-const WORKER_PAGE_URL = "https://daisukedaisuke.github.io/typed-voice/worker.html";
+const WORKER_PAGE_URL = "https://rabbitdaisuke.github.io/typed-voice/worker.html";
 
 const storageWorkerPath = join(serverDirectory, "storage-worker.mjs");
 const adminWorkerPath = join(adminDirectory, "admin-http-worker.mjs");

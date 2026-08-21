@@ -41,7 +41,7 @@ Windows実機の用途別Codex sandbox境界を壊さず、Codespacesでは同�
 5. 実クライアントモードへそのファイルを投入し、AUTH、SERVER_CONFIG、PING/PONGまで通ることを確認する。
 ## Trusted Worker
 1. tokenなしの`/worker/`と`/worker/ws`が拒否され、server側からWorker HTML/JS/WASMが配信されないことを確認する。
-2. `data/worker/session-token.txt`の内容を使って`/worker/login#<token>`へアクセスし、fragmentがHTTP URLへ送信されず、同一originの`POST /worker/session`成功後に`https://daisukedaisuke.github.io/typed-voice/worker.html?server=wss%3A%2F%2F<remote-host>%2Fremote#<token>`へ遷移することを確認する。
+2. `data/worker/session-token.txt`の内容を使って`/worker/login#<token>`へアクセスし、fragmentがHTTP URLへ送信されず、同一originの`POST /worker/session`成功後に`https://rabbitdaisuke.github.io/typed-voice/worker.html?server=wss%3A%2F%2F<remote-host>%2Fremote#<token>`へ遷移することを確認する。
 3. 誤tokenと期限切れtokenが拒否され、10分window切替直後30秒だけ直前tokenが境界graceとして受理されることを確認する。
 4. 「このブラウザで参加する」を押して初めて公開`/remote` WSSへ接続し、Trusted Worker handshakeがRemote client handshakeと区別されてTrusted Worker sandboxへ中継されることを確認する。
 5. P-256一時ECDH公開鍵交換、双方proof、方向別AES-256-GCMセッション確立を確認する。

@@ -8,7 +8,7 @@
 - 通常起動で自動公開するQuick Tunnelは`remote`だけです。<br>`admin`と`worker`はloopbackだけに残し、必要な場合だけ`--open-admin=true` / `--open-worker=true`を明示して、それぞれ別のQuick Tunnelを起動します。<br>cloudflaredはCodex online workspace、各HTTP workerはCodex offline sandboxなので、公開HTTP workerが侵害されてもCodexのWindows network境界を破らない限り別loopback portへoutbound接続できない構成です。<br>
 - 3つのHTTP workerがreadyになった直後、各worker自身から残り2つのloopback portへ接続を試す起動時境界probeを必ず実行します。<br>1本でも接続できた場合はQuick Tunnelを公開する前に起動失敗とし、Codex/Windows Firewall設定が想定より広い状態でfail-openしません。<br>
 - Node.jsサーバー自身はChromeを起動しません。<br>Chrome DevTools Protocol、Chrome PID追跡、Chrome用watchdog、WebMCPは使用しません。<br>
-- Worker browser本体は`https://daisukedaisuke.github.io/typed-voice/worker.html`から配信します。<br>`/worker/login#<current-token>`はloopback側で短寿命Worker接続トークンを確認した後、公開Remote WSS URLを`server=`へ、同じWorker tokenをfragmentへ入れてGitHub Pagesの`worker.html`へ遷移します。<br>server releaseはWorker HTML/JS/WASMを同梱・配信しません。<br>
+- Worker browser本体は`https://rabbitdaisuke.github.io/typed-voice/worker.html`から配信します。<br>`/worker/login#<current-token>`はloopback側で短寿命Worker接続トークンを確認した後、公開Remote WSS URLを`server=`へ、同じWorker tokenをfragmentへ入れてGitHub Pagesの`worker.html`へ遷移します。<br>server releaseはWorker HTML/JS/WASMを同梱・配信しません。<br>
 - Workerは開いたブラウザごとに動的に増減します。<br>固定`--multi`はありません。<br>
 - Workerが切断またはPING timeoutになった場合、そのWorkerは死亡扱いにし、処理中ジョブは全体timeout内なら待ち行列先頭へ戻して別Workerへ再割当します。<br>
 ## Trusted Worker接続認証
